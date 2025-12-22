@@ -12,18 +12,24 @@ cd "/home/danst/Nextcloud/Projekte/2025-12 Todos Extension"
 cargo run --release
 ```
 
-Beim Start erwartet die App, dass die produktive Markdown-Datei unter `/home/danst/Nextcloud/InOmnibusVeritas/TodosDatenbank.md` erreichbar ist. Du kannst den Pfad in `src/data.rs` über die Konstante `TODO_DB_PATH` anpassen oder eine Symlink auf die Datei setzen.
+Standardmäßig greift die App auf die Datei `TodosDatenbank.md` im Projektverzeichnis zu. Wenn du eine andere Datei verwenden möchtest, setze vor dem Start die Umgebungsvariable `TODOS_DB_PATH`, z. B. `TODOS_DB_PATH=/pfad/zur/TodosDatenbank.md cargo run`.
 
 ## Bedienung
-- Die Liste blendet erledigte Einträge aus und zeigt nur noch offene Aufgaben aus der Markdown-Datei.
+- Die Liste blendet erledigte Einträge aus und zeigt nur noch offene Aufgaben; falls du erledigte Aufgaben sehen möchtest, kannst du sie im Einstellungsfenster temporär einblenden.
 - Oben kannst du per Auswahlfeld bestimmen, ob die Liste nach Projekten (`+`), Orten (`@`) oder Fälligkeitsdatum sortiert wird. Bei Projekten/Orten wird zusätzlich je Gruppe ein Zwischenüberschrift angezeigt; beim Datum stehen Aufgaben ohne Fälligkeitsdatum ganz oben. Die App merkt sich deine letzte Auswahl für den nächsten Start.
 - Ein Klick auf die Checkbox aktualisiert den Eintrag (Checkbox + `✅ YYYY-MM-DD`) direkt im Markdown.
-- Ein Klick auf den Text eines Eintrags öffnet ein Detailfenster, in dem du Titel, Projekt, Ort, Fälligkeitsdatum, Referenz und Status bearbeiten kannst.
+- Ein Doppelklick auf den Text eines Eintrags öffnet ein Detailfenster, in dem du Titel, Projekt, Ort, Fälligkeitsdatum, Referenz und Status bearbeiten kannst.
 - Über das Kalender-Symbol setzt du die Fälligkeit auf heute, der Pfeil direkt daneben verschiebt sie auf morgen.
 - Über den Refresh-Button (oder `Ctrl+R`) lässt sich die Datei jederzeit neu einlesen.
 - Änderungen außerhalb der App werden über einen Dateimonitor automatisch erkannt und eingelesen (sofern das Dateisystem es unterstützt).
+- Ein Klick auf das Hamburger-Symbol öffnet ein Einstellungsfenster, in dem du erledigte Aufgaben ein- bzw. ausblendest und die zu verwendende Markdown-Datei auswählst. Die Änderungen werden dauerhaft gespeichert.
+- Über die Tastaturkürzel `Ctrl+W`, `Ctrl+Q` und `Alt+F4` kannst du das Fenster jederzeit schließen.
 
 ## Offene Todos
-- [ ] Auf Strg-W und Strg-Q und Alt-F4 reagieren
-- [ ] Hamburgermenü mit Einstellungen
-- [ ] Einstellung, ob erledigte Tdodos angezeigt werden (default ist aus)
+- *(keine)*
+
+## Erledigte Todos
+- [x] Auf Strg-W und Strg-Q und Alt-F4 reagieren
+- [x] Hamburgermenü mit Einstellungen
+- [x] Einstellung, ob erledigte Tdodos angezeigt werden (default ist aus)
+- [x] Einstellung, auf welche Datei zugegriffen wird

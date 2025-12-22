@@ -1,12 +1,18 @@
-use std::fs;
-use std::path::Path;
+use std::{env, fs};
+use std::path::PathBuf;
+use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{Local, NaiveDate};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-pub const TODO_DB_PATH: &str = "/home/danst/Nextcloud/InOmnibusVeritas/TodosDatenbank.md";
+const DEFAULT_DB_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/TodosDatenbank.md");
+
+static TODO_PATH: Lazy<Mutex<PathBuf>> = Lazy::new(|| {
+    let configured = env::var("TODOS_DB_PATH").unwrap_or_else(|_| DEFAULT_DB_PATH.to_string());
+    Mutex::new(PathBuf::from(configured))
+});
 
 static LINK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\[([^\]]+)\]\]").unwrap());
 static PROJECT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\+([^\s]+)").unwrap());
@@ -33,13 +39,23 @@ pub struct TodoItem {
     pub done: bool,
 }
 
-pub fn todo_path() -> &'static Path {
-    Path::new(TODO_DB_PATH)
+pub fn todo_path() -> PathBuf {
+    TODO_PATH
+        .lock()
+        .expect("todo path lock poisoned")
+        .clone()
+}
+
+pub fn set_todo_path(new_path: PathBuf) {
+    if let Ok(mut path) = TODO_PATH.lock() {
+        *path = new_path;
+    }
 }
 
 pub fn load_todos() -> Result<Vec<TodoItem>> {
-    let content = fs::read_to_string(todo_path())
-        .with_context(|| format!("Konnte {} nicht lesen", todo_path().display()))?;
+    let path = todo_path();
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Konnte {} nicht lesen", path.display()))?;
 
     let mut items = Vec::new();
     let mut current_section = String::from("Ohne Abschnitt");
@@ -60,8 +76,9 @@ pub fn load_todos() -> Result<Vec<TodoItem>> {
 }
 
 pub fn toggle_todo(key: &TodoKey, done: bool) -> Result<()> {
-    let content = fs::read_to_string(todo_path())
-        .with_context(|| format!("Konnte {} nicht lesen", todo_path().display()))?;
+    let path = todo_path();
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Konnte {} nicht lesen", path.display()))?;
     let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
     let had_trailing_newline = content.ends_with('\n');
 
@@ -83,16 +100,10 @@ pub fn toggle_todo(key: &TodoKey, done: bool) -> Result<()> {
         output.push('\n');
     }
 
-    fs::write(todo_path(), output)
-        .with_context(|| format!("Konnte {} nicht schreiben", todo_path().display()))?;
+    fs::write(&path, output)
+        .with_context(|| format!("Konnte {} nicht schreiben", path.display()))?;
 
     Ok(())
-}
-
-pub fn postpone_to_tomorrow(key: &TodoKey) -> Result<NaiveDate> {
-    let tomorrow = Local::now().date_naive() + Duration::days(1);
-    update_line(key, |line| rewrite_due(line, tomorrow))?;
-    Ok(tomorrow)
 }
 
 pub fn set_due_today(key: &TodoKey) -> Result<NaiveDate> {
@@ -178,8 +189,9 @@ fn update_line<F>(key: &TodoKey, rewrite: F) -> Result<()>
 where
     F: FnOnce(&str) -> Result<String>,
 {
-    let content = fs::read_to_string(todo_path())
-        .with_context(|| format!("Konnte {} nicht lesen", todo_path().display()))?;
+    let path = todo_path();
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Konnte {} nicht lesen", path.display()))?;
     let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
     let had_trailing_newline = content.ends_with('\n');
 
@@ -201,8 +213,8 @@ where
         output.push('\n');
     }
 
-    fs::write(todo_path(), output)
-        .with_context(|| format!("Konnte {} nicht schreiben", todo_path().display()))?;
+    fs::write(&path, output)
+        .with_context(|| format!("Konnte {} nicht schreiben", path.display()))?;
 
     Ok(())
 }

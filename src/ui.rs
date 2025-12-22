@@ -7,9 +7,10 @@ use std::rc::Rc;
 use adw::prelude::*;
 use adw::{self, Application};
 use anyhow::Result;
-use chrono::NaiveDate;
+use chrono::{Duration, Local, NaiveDate};
 use glib::{clone, BoxedAnyObject};
 use gtk::gio;
+use gtk::{AlertDialog, FileDialog, FileFilter};
 use gtk::gio::prelude::*;
 use gtk::glib;
 use gtk::pango;
@@ -69,6 +70,10 @@ impl SortMode {
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Preferences {
     sort_mode: Option<String>,
+    #[serde(default)]
+    show_done: bool,
+    #[serde(default)]
+    db_path: Option<String>,
 }
 
 pub fn build_ui(app: &Application) -> Result<()> {
@@ -83,6 +88,13 @@ pub fn build_ui(app: &Application) -> Result<()> {
         .title_widget(&gtk::Label::builder().label("Todos Datenbank").xalign(0.0).build())
         .build();
 
+    let settings_btn = gtk::Button::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Einstellungen")
+        .build();
+    settings_btn.add_css_class("flat");
+    header.pack_start(&settings_btn);
+
     let refresh_btn = gtk::Button::builder()
         .icon_name("view-refresh-symbolic")
         .tooltip_text("Neu laden (Ctrl+R)")
@@ -94,6 +106,11 @@ pub fn build_ui(app: &Application) -> Result<()> {
     overlay.set_vexpand(true);
     let store = gio::ListStore::new::<BoxedAnyObject>();
     let state = Rc::new(AppState::new(&window, &overlay, &store));
+
+    let state_for_settings_btn = Rc::clone(&state);
+    settings_btn.connect_clicked(move |_| {
+        state_for_settings_btn.show_settings_dialog();
+    });
 
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     controls.set_margin_start(12);
@@ -138,6 +155,21 @@ pub fn build_ui(app: &Application) -> Result<()> {
     app.add_action(&refresh_action);
     app.set_accels_for_action("app.reload", &["<Primary>r"]);
 
+    let settings_action = gio::SimpleAction::new("open-settings", None);
+    let state_for_settings_action = Rc::clone(&state);
+    settings_action.connect_activate(move |_, _| {
+        state_for_settings_action.show_settings_dialog();
+    });
+    app.add_action(&settings_action);
+
+    let close_action = gio::SimpleAction::new("close-window", None);
+    let window_for_close = window.clone();
+    close_action.connect_activate(move |_, _| {
+        window_for_close.close();
+    });
+    app.add_action(&close_action);
+    app.set_accels_for_action("app.close-window", &["<Primary>w", "<Primary>q", "<Alt>F4"]);
+
     refresh_btn.connect_clicked(clone!(@weak app => move |_| {
         let _ = app.activate_action("app.reload", None);
     }));
@@ -165,6 +197,7 @@ pub fn build_ui(app: &Application) -> Result<()> {
 fn create_list_view(state: &Rc<AppState>) -> gtk::ListView {
     let factory = gtk::SignalListItemFactory::new();
     let state_weak = Rc::downgrade(state);
+    let factory_state = state_weak.clone();
 
     factory.connect_setup(move |_, list_item_obj| {
         let Some(list_item) = list_item_obj.downcast_ref::<gtk::ListItem>() else {
@@ -220,33 +253,6 @@ fn create_list_view(state: &Rc<AppState>) -> gtk::ListView {
         meta.add_css_class("dim-label");
         column.append(&meta);
 
-        let detail_state = state_weak.clone();
-        let detail_list = list_item.downgrade();
-        let detail_gesture = gtk::GestureClick::new();
-        detail_gesture.set_button(0);
-        detail_gesture.set_propagation_phase(gtk::PropagationPhase::Target);
-        detail_gesture.connect_released(move |_, _, _, _| {
-            let Some(list_item) = detail_list.upgrade() else {
-                return;
-            };
-            let Some(obj) = list_item.item() else {
-                return;
-            };
-            let Ok(todo_obj) = obj.downcast::<BoxedAnyObject>() else {
-                return;
-            };
-            let entry = todo_obj.borrow::<ListEntry>();
-            let todo = match &*entry {
-                ListEntry::Item(todo) => todo.clone(),
-                ListEntry::Header(_) => return,
-            };
-
-            if let Some(state) = detail_state.upgrade() {
-                state.show_details_dialog(&todo);
-            }
-        });
-        column.add_controller(detail_gesture);
-
         container.append(&column);
 
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -282,7 +288,7 @@ fn create_list_view(state: &Rc<AppState>) -> gtk::ListView {
         }
 
         let weak_list = list_item.downgrade();
-        let state_for_handler = state_weak.clone();
+        let state_for_handler = factory_state.clone();
         check.connect_toggled(move |btn| {
             let Some(list_item) = weak_list.upgrade() else {
                 return;
@@ -310,7 +316,7 @@ fn create_list_view(state: &Rc<AppState>) -> gtk::ListView {
         });
 
         let postpone_list = list_item.downgrade();
-        let postpone_state = state_weak.clone();
+        let postpone_state = factory_state.clone();
         postpone_btn.connect_clicked(move |_| {
             let Some(list_item) = postpone_list.upgrade() else {
                 return;
@@ -328,14 +334,12 @@ fn create_list_view(state: &Rc<AppState>) -> gtk::ListView {
             };
 
             if let Some(state) = postpone_state.upgrade() {
-                if let Err(err) = state.postpone_item(&todo) {
-                    state.show_error(&format!("Konnte verschieben: {err}"));
-                }
+                state.show_due_shortcuts(&todo);
             }
         });
 
         let today_list = list_item.downgrade();
-        let today_state = state_weak.clone();
+        let today_state = factory_state.clone();
         today_btn.connect_clicked(move |_| {
             let Some(list_item) = today_list.upgrade() else {
                 return;
@@ -425,7 +429,15 @@ fn create_list_view(state: &Rc<AppState>) -> gtk::ListView {
     });
 
     let model = gtk::NoSelection::new(Some(state.store()));
-    gtk::ListView::new(Some(model), Some(factory))
+    let list_view = gtk::ListView::new(Some(model), Some(factory));
+    list_view.set_single_click_activate(true);
+    let activate_state = state_weak.clone();
+    list_view.connect_activate(move |_, position| {
+        if let Some(state) = activate_state.upgrade() {
+            state.open_entry_at(position);
+        }
+    });
+    list_view
 }
 
 struct AppState {
@@ -447,6 +459,12 @@ impl AppState {
             .map(SortMode::from_key)
             .unwrap_or(SortMode::Topic);
         prefs.sort_mode = Some(sort_mode.as_key().to_string());
+        if let Some(db_path) = prefs.db_path.clone() {
+            data::set_todo_path(PathBuf::from(db_path));
+        } else {
+            let current = data::todo_path();
+            prefs.db_path = Some(current.to_string_lossy().into_owned());
+        }
         Self {
             store: store.clone(),
             overlay: overlay.clone(),
@@ -464,6 +482,10 @@ impl AppState {
 
     fn sort_mode(&self) -> SortMode {
         *self.sort_mode.borrow()
+    }
+
+    fn show_completed(&self) -> bool {
+        self.preferences.borrow().show_done
     }
 
     fn reload(&self) -> Result<()> {
@@ -485,18 +507,272 @@ impl AppState {
         Ok(())
     }
 
-    fn postpone_item(&self, todo: &TodoItem) -> Result<()> {
-        let new_due = data::postpone_to_tomorrow(&todo.key)?;
-        self.reload()?;
-        self.show_info(&format!("Verschoben auf {}", new_due));
-        Ok(())
-    }
-
     fn set_due_today(&self, todo: &TodoItem) -> Result<()> {
         let today = data::set_due_today(&todo.key)?;
         self.reload()?;
         self.show_info(&format!("Fällig heute ({})", today));
         Ok(())
+    }
+
+    fn set_due_in_days(&self, todo: &TodoItem, days: i64) -> Result<()> {
+        let mut updated = todo.clone();
+        let target = Local::now().date_naive() + Duration::days(days);
+        updated.due = Some(target);
+        self.save_item(&updated)
+    }
+
+    fn clear_due_date(&self, todo: &TodoItem) -> Result<()> {
+        let mut updated = todo.clone();
+        updated.due = None;
+        self.save_item(&updated)
+    }
+
+    fn show_due_shortcuts(self: &Rc<Self>, todo: &TodoItem) {
+        let Some(parent) = self.window.upgrade() else {
+            self.show_error("Kein Fenster verfügbar");
+            return;
+        };
+
+        let dialog = AlertDialog::builder()
+            .modal(true)
+            .build();
+        dialog.set_message("Fälligkeit verschieben");
+        dialog.set_detail("Bitte Ziel wählen");
+        dialog.set_buttons(&["Morgen", "In 3 Tagen", "In 7 Tagen", "In einem Monat", "Irgendwann", "Abbrechen"]);
+        dialog.set_default_button(0);
+        dialog.set_cancel_button(5);
+
+        let state = Rc::clone(self);
+        let base_todo = todo.clone();
+        dialog.choose(
+            Some(&parent),
+            Option::<&gio::Cancellable>::None,
+            clone!(@strong state, @strong base_todo => move |result| {
+                match result {
+                    Ok(index) => {
+                        let action = match index {
+                            0 => Some(1),
+                            1 => Some(3),
+                            2 => Some(7),
+                            3 => Some(30),
+                            4 => None,
+                            _ => return,
+                        };
+
+                        let outcome = match action {
+                            Some(days) => state.set_due_in_days(&base_todo, days),
+                            None => state.clear_due_date(&base_todo),
+                        };
+
+                        if let Err(err) = outcome {
+                            state.show_error(&format!("Konnte verschieben: {err}"));
+                        }
+                    }
+                    Err(err) => {
+                        state.show_error(&format!("Konnte Dialog nicht anzeigen: {err}"));
+                    }
+                }
+            }),
+        );
+    }
+
+    fn choose_database_file(
+        self: &Rc<Self>,
+        parent: &impl IsA<gtk::Window>,
+        on_success: Option<Rc<dyn Fn(PathBuf)>>,
+    ) {
+        let mut builder = FileDialog::builder()
+            .title("Datenbankdatei auswählen")
+            .modal(true);
+
+        if let Some(folder) = data::todo_path().parent() {
+            let folder_file = gio::File::for_path(folder);
+            builder = builder.initial_folder(&folder_file);
+        }
+
+        if let Some(name) = data::todo_path().file_name().and_then(|n| n.to_str()) {
+            builder = builder.initial_name(name);
+        }
+
+        let markdown_filter = FileFilter::new();
+        markdown_filter.set_name(Some("Markdown-Dateien"));
+        markdown_filter.add_pattern("*.md");
+        let filters = gio::ListStore::new::<FileFilter>();
+        filters.append(&markdown_filter);
+        let builder = builder
+            .filters(&filters)
+            .default_filter(&markdown_filter)
+            .accept_label("Auswählen");
+
+        let dialog = builder.build();
+        let callback = on_success.clone();
+
+        dialog.open(
+            Some(parent),
+            Option::<&gio::Cancellable>::None,
+            clone!(@strong self as state => move |result| {
+                match result {
+                    Ok(file) => {
+                        if let Some(path) = file.path() {
+                            let path_buf = path;
+                            if state.set_database_path(path_buf.clone()) {
+                                if let Some(cb) = callback.clone() {
+                                    cb(path_buf);
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        if err.matches(gio::IOErrorEnum::Cancelled) {
+                            return;
+                        }
+                        state.show_error(&format!("Datei konnte nicht gewählt werden: {err}"));
+                    }
+                }
+            }),
+        );
+    }
+
+    fn show_settings_dialog(self: &Rc<Self>) {
+        let Some(parent) = self.window.upgrade() else {
+            self.show_error("Kein Fenster verfügbar");
+            return;
+        };
+
+        let dialog = adw::Window::builder()
+            .title("Einstellungen")
+            .transient_for(&parent)
+            .modal(true)
+            .default_width(420)
+            .build();
+        dialog.set_destroy_with_parent(true);
+
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        content.set_margin_start(20);
+        content.set_margin_end(20);
+        content.set_margin_top(20);
+        content.set_margin_bottom(20);
+
+        let show_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let show_label = gtk::Label::builder()
+            .label("Erledigte Aufgaben anzeigen")
+            .xalign(0.0)
+            .hexpand(true)
+            .build();
+        let show_switch = gtk::Switch::new();
+        show_switch.set_halign(gtk::Align::End);
+        show_switch.set_active(self.show_completed());
+        let toggle_state = Rc::clone(self);
+        show_switch.connect_state_set(move |_, value| {
+            toggle_state.set_show_completed(value);
+            glib::Propagation::Proceed
+        });
+        show_row.append(&show_label);
+        show_row.append(&show_switch);
+        content.append(&show_row);
+
+        let file_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        file_row.append(&gtk::Label::builder().label("Datenbankdatei").xalign(0.0).build());
+        let path_label = gtk::Label::builder()
+            .xalign(0.0)
+            .wrap(true)
+            .selectable(true)
+            .build();
+        path_label.set_text(&data::todo_path().display().to_string());
+
+        let file_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        file_buttons.set_hexpand(true);
+        file_buttons.append(&path_label);
+        let choose_btn = gtk::Button::with_label("Datei auswählen…");
+        let label_ref = path_label.downgrade();
+        let state_for_file = Rc::clone(self);
+        let dialog_ref = dialog.downgrade();
+        choose_btn.connect_clicked(move |_| {
+            let Some(settings_window) = dialog_ref.upgrade() else {
+                return;
+            };
+            let label_ref_clone = label_ref.clone();
+            let callback = Rc::new(move |path: PathBuf| {
+                if let Some(label) = label_ref_clone.upgrade() {
+                    label.set_text(&path.display().to_string());
+                }
+            });
+            state_for_file.choose_database_file(&settings_window, Some(callback));
+        });
+        file_buttons.append(&choose_btn);
+        file_row.append(&file_buttons);
+        content.append(&file_row);
+
+        let close_btn = gtk::Button::with_label("Schließen");
+        close_btn.set_halign(gtk::Align::End);
+        let dialog_close = dialog.clone();
+        close_btn.connect_clicked(move |_| {
+            dialog_close.close();
+        });
+        content.append(&close_btn);
+
+        dialog.set_content(Some(&content));
+        dialog.present();
+    }
+
+    fn set_database_path(self: &Rc<Self>, path: PathBuf) -> bool {
+        if !path.exists() {
+            self.show_error("Datei existiert nicht");
+            return false;
+        }
+
+        let canonical = match path.canonicalize() {
+            Ok(p) => p,
+            Err(err) => {
+                self.show_error(&format!("Konnte Pfad nicht öffnen: {err}"));
+                return false;
+            }
+        };
+
+        let previous = data::todo_path();
+        if previous == canonical {
+            self.show_info("Diese Datei ist bereits aktiv");
+            return false;
+        }
+
+        data::set_todo_path(canonical.clone());
+        if let Err(err) = self.reload() {
+            data::set_todo_path(previous);
+            if let Err(rollback_err) = self.reload() {
+                eprintln!("Rollback fehlgeschlagen: {rollback_err}");
+            }
+            self.show_error(&format!("Konnte Datei nicht laden: {err}"));
+            return false;
+        }
+
+        {
+            let mut prefs = self.preferences.borrow_mut();
+            prefs.db_path = Some(canonical.to_string_lossy().into_owned());
+        }
+        self.persist_preferences();
+
+        if let Some(old_monitor) = self.monitor.borrow_mut().take() {
+            drop(old_monitor);
+        }
+        if let Err(err) = self.install_monitor() {
+            self.show_error(&format!("Dateiüberwachung nicht verfügbar: {err}"));
+        }
+
+        self.show_info(&format!("Nutze {}", canonical.display()));
+        true
+    }
+
+    fn set_show_completed(&self, show: bool) {
+        {
+            let mut prefs = self.preferences.borrow_mut();
+            if prefs.show_done == show {
+                return;
+            }
+            prefs.show_done = show;
+        }
+
+        self.persist_preferences();
+        self.repopulate_store();
     }
 
     fn set_sort_mode(&self, mode: SortMode) {
@@ -524,7 +800,8 @@ impl AppState {
         self.store.remove_all();
         let mode = *self.sort_mode.borrow();
         let mut last_group: Option<String> = None;
-        for item in items.into_iter().filter(|todo| !todo.done) {
+        let include_done = self.show_completed();
+        for item in items.into_iter().filter(|todo| include_done || !todo.done) {
             if let Some(label) = self.group_label(mode, &item) {
                 if last_group.as_ref() != Some(&label) {
                     self.store
@@ -548,6 +825,22 @@ impl AppState {
         self.reload()?;
         self.show_info(&format!("Aktualisiert: {}", updated.title));
         Ok(())
+    }
+
+    fn open_entry_at(self: &Rc<Self>, position: u32) {
+        let Some(obj) = self.store.item(position) else {
+            return;
+        };
+        let Ok(todo_obj) = obj.downcast::<BoxedAnyObject>() else {
+            return;
+        };
+        let entry = todo_obj.borrow::<ListEntry>();
+        let todo = match &*entry {
+            ListEntry::Item(todo) => todo.clone(),
+            ListEntry::Header(_) => return,
+        };
+        drop(entry);
+        self.show_details_dialog(&todo);
     }
 
     fn show_details_dialog(self: &Rc<Self>, todo: &TodoItem) {
@@ -612,17 +905,14 @@ impl AppState {
         }
         let due_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
         due_row.append(&gtk::Label::builder().label("Fälligkeitsdatum").xalign(0.0).build());
-        due_row.append(&due_entry);
+        let due_inputs = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        due_entry.set_hexpand(true);
+        due_inputs.append(&due_entry);
+        let due_today_btn = gtk::Button::with_label("Heute");
+        due_today_btn.add_css_class("flat");
+        due_inputs.append(&due_today_btn);
+        due_row.append(&due_inputs);
         content.append(&due_row);
-
-        let reference_entry = gtk::Entry::new();
-        if let Some(reference) = &todo.reference {
-            reference_entry.set_text(reference);
-        }
-        let reference_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        reference_row.append(&gtk::Label::builder().label("Referenz ([[ ]])").xalign(0.0).build());
-        reference_row.append(&reference_entry);
-        content.append(&reference_row);
 
         let done_check = gtk::CheckButton::with_label("Erledigt");
         done_check.set_active(todo.done);
@@ -643,6 +933,12 @@ impl AppState {
             dialog_cancel.close();
         });
 
+        let due_entry_for_button = due_entry.clone();
+        due_today_btn.connect_clicked(move |_| {
+            let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
+            due_entry_for_button.set_text(&today);
+        });
+
         let dialog_save = dialog.clone();
         let state_for_save = Rc::clone(self);
         let base_item = todo.clone();
@@ -650,7 +946,6 @@ impl AppState {
         let project_entry_save = project_entry.clone();
         let context_entry_save = context_entry.clone();
         let due_entry_save = due_entry.clone();
-        let reference_entry_save = reference_entry.clone();
         let done_check_save = done_check.clone();
         save_btn.connect_clicked(move |_| {
             let title_text = title_entry_save.text().trim().to_string();
@@ -673,13 +968,6 @@ impl AppState {
                 Some(context_text)
             };
 
-            let reference_text = reference_entry_save.text().trim().to_string();
-            let reference_value = if reference_text.is_empty() {
-                None
-            } else {
-                Some(reference_text)
-            };
-
             let due_text = due_entry_save.text().trim().to_string();
             let due_value = if due_text.is_empty() {
                 None
@@ -697,7 +985,7 @@ impl AppState {
             updated.title = title_text;
             updated.project = project_value;
             updated.context = context_value;
-            updated.reference = reference_value;
+            updated.reference = base_item.reference.clone();
             updated.due = due_value;
             updated.done = done_check_save.is_active();
 
@@ -755,9 +1043,32 @@ impl AppState {
     fn install_monitor(self: &Rc<Self>) -> Result<()> {
         let file = gio::File::for_path(data::todo_path());
         let monitor = file.monitor_file(gio::FileMonitorFlags::NONE, Option::<&gio::Cancellable>::None)?;
-        monitor.connect_changed(clone!(@weak self as state => move |_, _, _, _| {
-            if let Err(err) = state.reload() {
-                state.show_error(&format!("Aktualisierung fehlgeschlagen: {err}"));
+        monitor.connect_changed(clone!(@weak self as state => move |_, _, _, event| {
+            use gio::FileMonitorEvent as Event;
+            let should_reload = matches!(
+                event,
+                Event::Changed
+                    | Event::ChangesDoneHint
+                    | Event::Created
+                    | Event::Deleted
+                    | Event::Moved
+                    | Event::Renamed
+                    | Event::AttributeChanged
+            );
+
+            if !should_reload {
+                return;
+            }
+
+            match state.reload() {
+                Ok(_) => {
+                    if matches!(event, Event::ChangesDoneHint | Event::Changed | Event::Created) {
+                        state.show_info("Änderungen aus Datei übernommen");
+                    }
+                }
+                Err(err) => {
+                    state.show_error(&format!("Aktualisierung fehlgeschlagen: {err}"));
+                }
             }
         }));
         *self.monitor.borrow_mut() = Some(monitor);
