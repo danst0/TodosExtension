@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -89,6 +89,12 @@ pub fn toggle_todo(key: &TodoKey, done: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn postpone_to_tomorrow(key: &TodoKey) -> Result<NaiveDate> {
+    let tomorrow = Local::now().date_naive() + Duration::days(1);
+    update_line(key, |line| rewrite_due(line, tomorrow))?;
+    Ok(tomorrow)
+}
+
 fn parse_line(line: &str, line_index: usize, section: &str) -> Option<TodoItem> {
     let trimmed = line.trim_start();
     let (done, rest) = if let Some(body) = trimmed.strip_prefix("- [x]") {
@@ -157,6 +163,39 @@ fn find_line_by_marker(lines: &[String], marker: &str) -> Option<usize> {
         .position(|line| line.split_whitespace().any(|token| token == needle))
 }
 
+fn update_line<F>(key: &TodoKey, rewrite: F) -> Result<()>
+where
+    F: FnOnce(&str) -> Result<String>,
+{
+    let content = fs::read_to_string(todo_path())
+        .with_context(|| format!("Konnte {} nicht lesen", todo_path().display()))?;
+    let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
+    let had_trailing_newline = content.ends_with('\n');
+
+    let mut target_index = None;
+    if let Some(marker) = &key.marker {
+        target_index = find_line_by_marker(&lines, marker);
+    }
+    if target_index.is_none() && key.line_index < lines.len() {
+        target_index = Some(key.line_index);
+    }
+
+    let index = target_index.ok_or_else(|| anyhow!("Konnte To-do in der Datei nicht finden"))?;
+    let updated_line = rewrite(&lines[index])
+        .with_context(|| format!("Konnte Zeile {} nicht aktualisieren", index + 1))?;
+    lines[index] = updated_line;
+
+    let mut output = lines.join("\n");
+    if had_trailing_newline {
+        output.push('\n');
+    }
+
+    fs::write(todo_path(), output)
+        .with_context(|| format!("Konnte {} nicht schreiben", todo_path().display()))?;
+
+    Ok(())
+}
+
 fn rewrite_line(line: &str, done: bool) -> Result<String> {
     let mut updated = line.to_string();
     let has_checked = updated.contains("- [x]") || updated.contains("- [X]");
@@ -199,5 +238,32 @@ fn apply_completion_marker(line: &str, done: bool) -> String {
         }
     } else {
         COMPLETION_RE.replace(line, "").to_string()
+    }
+}
+
+fn rewrite_due(line: &str, new_due: NaiveDate) -> Result<String> {
+    let segment = format!("due:{}", new_due.format("%Y-%m-%d"));
+    if DUE_RE.is_match(line) {
+        Ok(DUE_RE.replace(line, segment).to_string())
+    } else {
+        Ok(insert_due_segment(line, &segment))
+    }
+}
+
+fn insert_due_segment(line: &str, segment: &str) -> String {
+    const MARKERS: [&str; 5] = [" +", " @", " [[", " ✅", " ^"];
+    let mut insert_at = line.len();
+    for marker in MARKERS {
+        if let Some(idx) = line.find(marker) {
+            insert_at = insert_at.min(idx);
+        }
+    }
+
+    let (head, tail) = line.split_at(insert_at);
+    let needs_space = !head.ends_with(' ') && !head.is_empty();
+    if needs_space {
+        format!("{head} {segment}{tail}")
+    } else {
+        format!("{head}{segment}{tail}")
     }
 }

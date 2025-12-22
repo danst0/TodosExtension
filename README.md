@@ -15,7 +15,14 @@ cargo run --release
 Beim Start erwartet die App, dass die produktive Markdown-Datei unter `/home/danst/Nextcloud/InOmnibusVeritas/TodosDatenbank.md` erreichbar ist. Du kannst den Pfad in `src/data.rs` über die Konstante `TODO_DB_PATH` anpassen oder eine Symlink auf die Datei setzen.
 
 ## Bedienung
-- Die Liste zeigt alle offenen und erledigten Einträge aus der Markdown-Datei.
+- Die Liste blendet erledigte Einträge aus und zeigt nur noch offene Aufgaben aus der Markdown-Datei.
+- Oben kannst du per Auswahlfeld bestimmen, ob die Liste nach Projekten (`+`), Orten (`@`) oder Fälligkeitsdatum sortiert wird. Bei Projekten/Orten wird zusätzlich je Gruppe ein Zwischenüberschrift angezeigt.
 - Ein Klick auf die Checkbox aktualisiert den Eintrag (Checkbox + `✅ YYYY-MM-DD`) direkt im Markdown.
+- Über das Pfeilsymbol rechts neben einem Eintrag verschiebst du dessen `due:`-Datum automatisch auf morgen.
 - Über den Refresh-Button (oder `Ctrl+R`) lässt sich die Datei jederzeit neu einlesen.
 - Änderungen außerhalb der App werden über einen Dateimonitor automatisch erkannt und eingelesen (sofern das Dateisystem es unterstützt).
+
+## Offene Todos
+- [ ] Auf Strg-W und Strg-Q und Alt-F4 reagieren
+- [ ] Hamburgermenü mit Einstellungen
+- [ ] Einstellung, ob erledigte Tdodos angezeigt werden (default ist aus)
