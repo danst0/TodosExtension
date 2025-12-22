@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::fs;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -12,6 +14,8 @@ use gtk::gio::prelude::*;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
+use serde::{Deserialize, Serialize};
+use serde_json;
 
 use crate::data::{self, TodoItem};
 
@@ -44,6 +48,27 @@ impl SortMode {
             SortMode::Date => 2,
         }
     }
+
+    fn from_key(key: &str) -> Self {
+        match key {
+            "location" => SortMode::Location,
+            "date" => SortMode::Date,
+            _ => SortMode::Topic,
+        }
+    }
+
+    fn as_key(self) -> &'static str {
+        match self {
+            SortMode::Topic => "topic",
+            SortMode::Location => "location",
+            SortMode::Date => "date",
+        }
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Preferences {
+    sort_mode: Option<String>,
 }
 
 pub fn build_ui(app: &Application) -> Result<()> {
@@ -68,7 +93,7 @@ pub fn build_ui(app: &Application) -> Result<()> {
     overlay.set_hexpand(true);
     overlay.set_vexpand(true);
     let store = gio::ListStore::new::<BoxedAnyObject>();
-    let state = Rc::new(AppState::new(&overlay, &store));
+    let state = Rc::new(AppState::new(&window, &overlay, &store));
 
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     controls.set_margin_start(12);
@@ -195,11 +220,46 @@ fn create_list_view(state: &Rc<AppState>) -> gtk::ListView {
         meta.add_css_class("dim-label");
         column.append(&meta);
 
+        let detail_state = state_weak.clone();
+        let detail_list = list_item.downgrade();
+        let detail_gesture = gtk::GestureClick::new();
+        detail_gesture.set_button(0);
+        detail_gesture.set_propagation_phase(gtk::PropagationPhase::Target);
+        detail_gesture.connect_released(move |_, _, _, _| {
+            let Some(list_item) = detail_list.upgrade() else {
+                return;
+            };
+            let Some(obj) = list_item.item() else {
+                return;
+            };
+            let Ok(todo_obj) = obj.downcast::<BoxedAnyObject>() else {
+                return;
+            };
+            let entry = todo_obj.borrow::<ListEntry>();
+            let todo = match &*entry {
+                ListEntry::Item(todo) => todo.clone(),
+                ListEntry::Header(_) => return,
+            };
+
+            if let Some(state) = detail_state.upgrade() {
+                state.show_details_dialog(&todo);
+            }
+        });
+        column.add_controller(detail_gesture);
+
         container.append(&column);
 
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         container.append(&spacer);
+
+        let today_btn = gtk::Button::builder()
+            .icon_name("x-office-calendar-symbolic")
+            .tooltip_text("Fälligkeit auf heute setzen")
+            .build();
+        today_btn.set_valign(gtk::Align::Center);
+        today_btn.add_css_class("flat");
+        container.append(&today_btn);
 
         let postpone_btn = gtk::Button::builder()
             .icon_name("go-next-symbolic")
@@ -270,6 +330,31 @@ fn create_list_view(state: &Rc<AppState>) -> gtk::ListView {
             if let Some(state) = postpone_state.upgrade() {
                 if let Err(err) = state.postpone_item(&todo) {
                     state.show_error(&format!("Konnte verschieben: {err}"));
+                }
+            }
+        });
+
+        let today_list = list_item.downgrade();
+        let today_state = state_weak.clone();
+        today_btn.connect_clicked(move |_| {
+            let Some(list_item) = today_list.upgrade() else {
+                return;
+            };
+            let Some(obj) = list_item.item() else {
+                return;
+            };
+            let Ok(todo_obj) = obj.downcast::<BoxedAnyObject>() else {
+                return;
+            };
+            let entry = todo_obj.borrow::<ListEntry>();
+            let todo = match &*entry {
+                ListEntry::Item(todo) => todo.clone(),
+                ListEntry::Header(_) => return,
+            };
+
+            if let Some(state) = today_state.upgrade() {
+                if let Err(err) = state.set_due_today(&todo) {
+                    state.show_error(&format!("Konnte Fälligkeit setzen: {err}"));
                 }
             }
         });
@@ -349,16 +434,27 @@ struct AppState {
     monitor: RefCell<Option<gio::FileMonitor>>,
     cached_items: RefCell<Vec<TodoItem>>,
     sort_mode: RefCell<SortMode>,
+    window: glib::WeakRef<adw::ApplicationWindow>,
+    preferences: RefCell<Preferences>,
 }
 
 impl AppState {
-    fn new(overlay: &adw::ToastOverlay, store: &gio::ListStore) -> Self {
+    fn new(window: &adw::ApplicationWindow, overlay: &adw::ToastOverlay, store: &gio::ListStore) -> Self {
+        let mut prefs = load_preferences();
+        let sort_mode = prefs
+            .sort_mode
+            .as_deref()
+            .map(SortMode::from_key)
+            .unwrap_or(SortMode::Topic);
+        prefs.sort_mode = Some(sort_mode.as_key().to_string());
         Self {
             store: store.clone(),
             overlay: overlay.clone(),
             monitor: RefCell::new(None),
             cached_items: RefCell::new(Vec::new()),
-            sort_mode: RefCell::new(SortMode::Topic),
+            sort_mode: RefCell::new(sort_mode),
+            window: window.downgrade(),
+            preferences: RefCell::new(prefs),
         }
     }
 
@@ -396,6 +492,13 @@ impl AppState {
         Ok(())
     }
 
+    fn set_due_today(&self, todo: &TodoItem) -> Result<()> {
+        let today = data::set_due_today(&todo.key)?;
+        self.reload()?;
+        self.show_info(&format!("Fällig heute ({})", today));
+        Ok(())
+    }
+
     fn set_sort_mode(&self, mode: SortMode) {
         {
             let mut current = self.sort_mode.borrow_mut();
@@ -404,6 +507,13 @@ impl AppState {
             }
             *current = mode;
         }
+
+        {
+            let mut prefs = self.preferences.borrow_mut();
+            prefs.sort_mode = Some(mode.as_key().to_string());
+        }
+
+        self.persist_preferences();
 
         self.repopulate_store();
     }
@@ -424,6 +534,181 @@ impl AppState {
             }
             self.store.append(&BoxedAnyObject::new(ListEntry::Item(item)));
         }
+    }
+
+    fn persist_preferences(&self) {
+        let prefs = self.preferences.borrow().clone();
+        if let Err(err) = write_preferences(&prefs) {
+            eprintln!("Konnte Einstellungen nicht speichern: {err}");
+        }
+    }
+
+    fn save_item(&self, updated: &TodoItem) -> Result<()> {
+        data::update_todo_details(updated)?;
+        self.reload()?;
+        self.show_info(&format!("Aktualisiert: {}", updated.title));
+        Ok(())
+    }
+
+    fn show_details_dialog(self: &Rc<Self>, todo: &TodoItem) {
+        let Some(parent) = self.window.upgrade() else {
+            self.show_error("Kein Fenster verfügbar");
+            return;
+        };
+
+        let dialog = adw::Window::builder()
+            .title("Aufgabe bearbeiten")
+            .transient_for(&parent)
+            .modal(true)
+            .default_width(420)
+            .build();
+        dialog.set_destroy_with_parent(true);
+
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.set_margin_top(16);
+        content.set_margin_bottom(16);
+        content.set_margin_start(20);
+        content.set_margin_end(20);
+
+        let section_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        section_row.append(&gtk::Label::builder().label("Bereich").xalign(0.0).build());
+        let section_value = gtk::Label::builder()
+            .label(&todo.section)
+            .xalign(0.0)
+            .build();
+        section_value.add_css_class("dim-label");
+        section_row.append(&section_value);
+        content.append(&section_row);
+
+        let title_entry = gtk::Entry::builder().text(&todo.title).hexpand(true).build();
+        let title_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        title_row.append(&gtk::Label::builder().label("Titel").xalign(0.0).build());
+        title_row.append(&title_entry);
+        content.append(&title_row);
+
+        let project_entry = gtk::Entry::new();
+        if let Some(project) = &todo.project {
+            project_entry.set_text(project);
+        }
+        let project_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        project_row.append(&gtk::Label::builder().label("Projekt (+)").xalign(0.0).build());
+        project_row.append(&project_entry);
+        content.append(&project_row);
+
+        let context_entry = gtk::Entry::new();
+        if let Some(context) = &todo.context {
+            context_entry.set_text(context);
+        }
+        let context_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        context_row.append(&gtk::Label::builder().label("Ort (@)").xalign(0.0).build());
+        context_row.append(&context_entry);
+        content.append(&context_row);
+
+        let due_entry = gtk::Entry::new();
+        due_entry.set_placeholder_text(Some("YYYY-MM-DD"));
+        if let Some(due) = todo.due {
+            let due_string = due.format("%Y-%m-%d").to_string();
+            due_entry.set_text(&due_string);
+        }
+        let due_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        due_row.append(&gtk::Label::builder().label("Fälligkeitsdatum").xalign(0.0).build());
+        due_row.append(&due_entry);
+        content.append(&due_row);
+
+        let reference_entry = gtk::Entry::new();
+        if let Some(reference) = &todo.reference {
+            reference_entry.set_text(reference);
+        }
+        let reference_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        reference_row.append(&gtk::Label::builder().label("Referenz ([[ ]])").xalign(0.0).build());
+        reference_row.append(&reference_entry);
+        content.append(&reference_row);
+
+        let done_check = gtk::CheckButton::with_label("Erledigt");
+        done_check.set_active(todo.done);
+        content.append(&done_check);
+
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        buttons.set_halign(gtk::Align::End);
+        let cancel_btn = gtk::Button::with_label("Abbrechen");
+        let save_btn = gtk::Button::with_label("Speichern");
+        save_btn.add_css_class("suggested-action");
+        buttons.append(&cancel_btn);
+        buttons.append(&save_btn);
+        content.append(&buttons);
+        dialog.set_content(Some(&content));
+
+        let dialog_cancel = dialog.clone();
+        cancel_btn.connect_clicked(move |_| {
+            dialog_cancel.close();
+        });
+
+        let dialog_save = dialog.clone();
+        let state_for_save = Rc::clone(self);
+        let base_item = todo.clone();
+        let title_entry_save = title_entry.clone();
+        let project_entry_save = project_entry.clone();
+        let context_entry_save = context_entry.clone();
+        let due_entry_save = due_entry.clone();
+        let reference_entry_save = reference_entry.clone();
+        let done_check_save = done_check.clone();
+        save_btn.connect_clicked(move |_| {
+            let title_text = title_entry_save.text().trim().to_string();
+            if title_text.is_empty() {
+                state_for_save.show_error("Titel darf nicht leer sein");
+                return;
+            }
+
+            let project_text = project_entry_save.text().trim().to_string();
+            let project_value = if project_text.is_empty() {
+                None
+            } else {
+                Some(project_text)
+            };
+
+            let context_text = context_entry_save.text().trim().to_string();
+            let context_value = if context_text.is_empty() {
+                None
+            } else {
+                Some(context_text)
+            };
+
+            let reference_text = reference_entry_save.text().trim().to_string();
+            let reference_value = if reference_text.is_empty() {
+                None
+            } else {
+                Some(reference_text)
+            };
+
+            let due_text = due_entry_save.text().trim().to_string();
+            let due_value = if due_text.is_empty() {
+                None
+            } else {
+                match NaiveDate::parse_from_str(&due_text, "%Y-%m-%d") {
+                    Ok(date) => Some(date),
+                    Err(_) => {
+                        state_for_save.show_error("Ungültiges Datum. Erwartet YYYY-MM-DD");
+                        return;
+                    }
+                }
+            };
+
+            let mut updated = base_item.clone();
+            updated.title = title_text;
+            updated.project = project_value;
+            updated.context = context_value;
+            updated.reference = reference_value;
+            updated.due = due_value;
+            updated.done = done_check_save.is_active();
+
+            if let Err(err) = state_for_save.save_item(&updated) {
+                state_for_save.show_error(&format!("Konnte Aufgabe nicht speichern: {err}"));
+            } else {
+                dialog_save.close();
+            }
+        });
+
+        dialog.present();
     }
 
     fn sort_items(&self, items: &mut [TodoItem]) {
@@ -499,6 +784,31 @@ fn format_metadata(item: &TodoItem) -> String {
     }
 
     parts.join(" • ")
+}
+
+fn load_preferences() -> Preferences {
+    let path = preferences_path();
+    if let Ok(data) = fs::read_to_string(&path) {
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        Preferences::default()
+    }
+}
+
+fn write_preferences(prefs: &Preferences) -> std::io::Result<()> {
+    let path = preferences_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let serialized = serde_json::to_string_pretty(prefs).unwrap_or_else(|_| "{}".into());
+    fs::write(path, serialized)
+}
+
+fn preferences_path() -> PathBuf {
+    let mut dir = glib::user_config_dir();
+    dir.push("todos_extension");
+    dir.push("preferences.json");
+    dir
 }
 
 fn compare_by_project(a: &TodoItem, b: &TodoItem) -> Ordering {

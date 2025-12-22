@@ -95,6 +95,17 @@ pub fn postpone_to_tomorrow(key: &TodoKey) -> Result<NaiveDate> {
     Ok(tomorrow)
 }
 
+pub fn set_due_today(key: &TodoKey) -> Result<NaiveDate> {
+    let today = Local::now().date_naive();
+    update_line(key, |line| rewrite_due(line, today))?;
+    Ok(today)
+}
+
+pub fn update_todo_details(item: &TodoItem) -> Result<()> {
+    let rendered = render_line(item)?;
+    update_line(&item.key, |_| Ok(rendered))
+}
+
 fn parse_line(line: &str, line_index: usize, section: &str) -> Option<TodoItem> {
     let trimmed = line.trim_start();
     let (done, rest) = if let Some(body) = trimmed.strip_prefix("- [x]") {
@@ -221,6 +232,49 @@ fn rewrite_line(line: &str, done: bool) -> Result<String> {
     updated = apply_completion_marker(&updated, done);
 
     Ok(updated)
+}
+
+fn render_line(item: &TodoItem) -> Result<String> {
+    let title = item.title.trim();
+    if title.is_empty() {
+        bail!("Titel darf nicht leer sein");
+    }
+
+    let checkbox = if item.done { "- [x]" } else { "- [ ]" };
+    let mut parts = vec![format!("{checkbox} {title}")];
+
+    if let Some(project) = normalize_token(item.project.as_deref()) {
+        parts.push(format!("+{project}"));
+    }
+    if let Some(context) = normalize_token(item.context.as_deref()) {
+        parts.push(format!("@{context}"));
+    }
+    if let Some(due) = item.due {
+        parts.push(format!("due:{}", due.format("%Y-%m-%d")));
+    }
+    if let Some(reference) = normalize_reference(item.reference.as_deref()) {
+        parts.push(format!("[[{reference}]]"));
+    }
+    if let Some(marker) = &item.key.marker {
+        if !marker.is_empty() {
+            parts.push(format!("^{marker}"));
+        }
+    }
+
+    let line = parts.join(" ");
+    Ok(apply_completion_marker(&line, item.done))
+}
+
+fn normalize_token(value: Option<&str>) -> Option<String> {
+    value
+        .map(|s| s.trim().replace(' ', ""))
+        .filter(|s| !s.is_empty())
+}
+
+fn normalize_reference(value: Option<&str>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn apply_completion_marker(line: &str, done: bool) -> String {
