@@ -10,3 +10,4 @@ repo/
 
 
 .local
+*.pyc

@@ -40,7 +40,7 @@ Login-Daten (konfigurierbar in `docker-compose.yml`):
 - Passwort: `secret`
 
 ## Offene Todos
-(Keine offenen Todos mehr)
+- [ ] Esc closes the Preferences Window
 
 ## Erledigte Todos
 - [x] Add a license CC BY NC SA
