@@ -5,3 +5,5 @@ TodosDatenbank.md
 build-dir/
 .cargo/
 vendor/
+
+.local
