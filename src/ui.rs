@@ -76,6 +76,14 @@ struct Preferences {
     db_path: Option<String>,
     #[serde(default)]
     show_due_only: bool,
+    #[serde(default)]
+    use_webdav: bool,
+    #[serde(default)]
+    webdav_url: Option<String>,
+    #[serde(default)]
+    webdav_username: Option<String>,
+    #[serde(default)]
+    webdav_password: Option<String>,
 }
 
 pub fn build_ui(app: &Application) -> Result<()> {
@@ -554,12 +562,24 @@ impl AppState {
             .map(SortMode::from_key)
             .unwrap_or(SortMode::Topic);
         prefs.sort_mode = Some(sort_mode.as_key().to_string());
-        if let Some(db_path) = prefs.db_path.clone() {
-            data::set_todo_path(PathBuf::from(db_path));
+
+        if prefs.use_webdav {
+             if let Some(url) = &prefs.webdav_url {
+                 data::set_backend_config(data::BackendConfig::WebDav {
+                     url: url.clone(),
+                     username: prefs.webdav_username.clone(),
+                     password: prefs.webdav_password.clone(),
+                 });
+             }
         } else {
-            let current = data::todo_path();
-            prefs.db_path = Some(current.to_string_lossy().into_owned());
+            if let Some(db_path) = prefs.db_path.clone() {
+                data::set_todo_path(PathBuf::from(db_path));
+            } else {
+                let current = data::todo_path();
+                prefs.db_path = Some(current.to_string_lossy().into_owned());
+            }
         }
+
         Self {
             store: store.clone(),
             overlay: overlay.clone(),
@@ -788,8 +808,24 @@ impl AppState {
         due_row.append(&due_switch);
         content.append(&due_row);
 
-        let file_row = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        file_row.append(&gtk::Label::builder().label("Datenbankdatei").xalign(0.0).build());
+        let storage_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let storage_label = gtk::Label::builder()
+            .label("WebDAV verwenden")
+            .xalign(0.0)
+            .hexpand(true)
+            .build();
+        let storage_switch = gtk::Switch::new();
+        storage_switch.set_halign(gtk::Align::End);
+        let (use_webdav, wd_url, wd_user, wd_pass) = self.get_webdav_prefs();
+        storage_switch.set_active(use_webdav);
+        
+        storage_row.append(&storage_label);
+        storage_row.append(&storage_switch);
+        content.append(&storage_row);
+
+        // Local File UI
+        let file_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        file_box.append(&gtk::Label::builder().label("Datenbankdatei").xalign(0.0).build());
         let path_label = gtk::Label::builder()
             .xalign(0.0)
             .wrap(true)
@@ -817,8 +853,56 @@ impl AppState {
             state_for_file.choose_database_file(&settings_window, Some(callback));
         });
         file_buttons.append(&choose_btn);
-        file_row.append(&file_buttons);
-        content.append(&file_row);
+        file_box.append(&file_buttons);
+        content.append(&file_box);
+
+        // WebDAV UI
+        let webdav_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        
+        let url_entry = gtk::Entry::builder().placeholder_text("WebDAV URL").build();
+        if let Some(url) = wd_url { url_entry.set_text(&url); }
+        
+        let user_entry = gtk::Entry::builder().placeholder_text("Benutzername").build();
+        if let Some(user) = wd_user { user_entry.set_text(&user); }
+
+        let pass_entry = gtk::PasswordEntry::builder().placeholder_text("Passwort").build();
+        if let Some(pass) = wd_pass { pass_entry.set_text(&pass); }
+
+        webdav_box.append(&gtk::Label::builder().label("WebDAV URL").xalign(0.0).build());
+        webdav_box.append(&url_entry);
+        webdav_box.append(&gtk::Label::builder().label("Benutzername").xalign(0.0).build());
+        webdav_box.append(&user_entry);
+        webdav_box.append(&gtk::Label::builder().label("Passwort").xalign(0.0).build());
+        webdav_box.append(&pass_entry);
+        content.append(&webdav_box);
+
+        // Visibility logic
+        let file_box_clone = file_box.clone();
+        let webdav_box_clone = webdav_box.clone();
+        let update_visibility = move |active: bool| {
+            file_box_clone.set_visible(!active);
+            webdav_box_clone.set_visible(active);
+        };
+        update_visibility(use_webdav);
+
+        let update_vis_clone = update_visibility.clone(); // Clone for closure
+        let storage_state = Rc::clone(self);
+        storage_switch.connect_state_set(move |_, value| {
+            storage_state.set_use_webdav(value);
+            update_vis_clone(value);
+            glib::Propagation::Proceed
+        });
+
+        // Connect entries
+        let url_state = Rc::clone(self);
+        url_entry.connect_changed(move |e| url_state.set_webdav_url(e.text().to_string()));
+        
+        let user_state = Rc::clone(self);
+        user_entry.connect_changed(move |e| user_state.set_webdav_username(e.text().to_string()));
+
+        let pass_state = Rc::clone(self);
+        pass_entry.connect_changed(move |e| pass_state.set_webdav_password(e.text().to_string()));
+
 
         let close_btn = gtk::Button::with_label("Schließen");
         close_btn.set_halign(gtk::Align::End);
@@ -904,6 +988,97 @@ impl AppState {
         self.persist_preferences();
         self.repopulate_store();
     }
+
+    fn set_use_webdav(&self, use_webdav: bool) {
+        {
+            let mut prefs = self.preferences.borrow_mut();
+            if prefs.use_webdav == use_webdav {
+                return;
+            }
+            prefs.use_webdav = use_webdav;
+        }
+        self.persist_preferences();
+        
+        if use_webdav {
+            let (_, url, user, pass) = self.get_webdav_prefs();
+            if let Some(u) = url {
+                data::set_backend_config(data::BackendConfig::WebDav {
+                    url: u,
+                    username: user,
+                    password: pass,
+                });
+            }
+        } else {
+            let path = data::todo_path();
+            data::set_backend_config(data::BackendConfig::Local(path));
+        }
+
+        if let Err(err) = self.reload() {
+             self.show_error(&format!("Konnte Daten nicht laden: {err}"));
+        }
+    }
+
+    fn set_webdav_url(&self, url: String) {
+        {
+            let mut prefs = self.preferences.borrow_mut();
+            prefs.webdav_url = Some(url.clone());
+        }
+        self.persist_preferences();
+        
+        let (use_webdav, _, user, pass) = self.get_webdav_prefs();
+        if use_webdav {
+             data::set_backend_config(data::BackendConfig::WebDav {
+                url,
+                username: user,
+                password: pass,
+            });
+            // Maybe reload?
+        }
+    }
+
+    fn set_webdav_username(&self, username: String) {
+        {
+            let mut prefs = self.preferences.borrow_mut();
+            prefs.webdav_username = Some(username.clone());
+        }
+        self.persist_preferences();
+
+        let (use_webdav, url, _, pass) = self.get_webdav_prefs();
+        if use_webdav {
+            if let Some(u) = url {
+                data::set_backend_config(data::BackendConfig::WebDav {
+                    url: u,
+                    username: Some(username),
+                    password: pass,
+                });
+            }
+        }
+    }
+
+    fn set_webdav_password(&self, password: String) {
+        {
+            let mut prefs = self.preferences.borrow_mut();
+            prefs.webdav_password = Some(password.clone());
+        }
+        self.persist_preferences();
+
+        let (use_webdav, url, user, _) = self.get_webdav_prefs();
+        if use_webdav {
+            if let Some(u) = url {
+                data::set_backend_config(data::BackendConfig::WebDav {
+                    url: u,
+                    username: user,
+                    password: Some(password),
+                });
+            }
+        }
+    }
+
+    fn get_webdav_prefs(&self) -> (bool, Option<String>, Option<String>, Option<String>) {
+        let prefs = self.preferences.borrow();
+        (prefs.use_webdav, prefs.webdav_url.clone(), prefs.webdav_username.clone(), prefs.webdav_password.clone())
+    }
+
 
     fn set_sort_mode(&self, mode: SortMode) {
         {

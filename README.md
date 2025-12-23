@@ -26,12 +26,27 @@ Standardmäßig greift die App auf die Datei `TodosDatenbank.md` im Projektverze
 - Ein Klick auf das Hamburger-Symbol öffnet ein Einstellungsfenster, in dem du erledigte Aufgaben ein-/ausblendest, den Filter "Nur fällige" steuerst und die zu verwendende Markdown-Datei auswählst. Die Änderungen werden dauerhaft gespeichert.
 - Über die Tastaturkürzel `Ctrl+W`, `Ctrl+Q` und `Alt+F4` kannst du das Fenster jederzeit schließen.
 
+## Web App
+Eine einfache Web-Oberfläche ist im Ordner `webapp/` verfügbar. Sie nutzt Docker Compose.
+
+Starten:
+```bash
+cd webapp
+docker-compose up --build
+```
+Die App ist dann unter `http://localhost:5000` erreichbar.
+Login-Daten (konfigurierbar in `docker-compose.yml`):
+- Benutzer: `admin`
+- Passwort: `secret`
+
 ## Offene Todos
-- [ ] Add a license CC BY NC SA
-- [ ] remove the checkmark from the TodosDatenbank file
-- [ ] add a simple Webapp with the same layout and functionality. Web App based on docker compose, python, flask, login based on user and password in docker compose env 
+(Keine offenen Todos mehr)
 
 ## Erledigte Todos
+- [x] Add a license CC BY NC SA
+- [x] add another way to connect to the database, via a direct connection to nextcloud via webdav. please add it as an option in the settings window
+- [x] remove the checkmark from the TodosDatenbank file
+- [x] add a simple Webapp with the same layout and functionality. Web App based on docker compose, python, flask, login based on user and password in docker compose env 
 - [x] Auf Strg-W und Strg-Q und Alt-F4 reagieren
 - [x] Hamburgermenü mit Einstellungen
 - [x] Einstellung, ob erledigte Tdodos angezeigt werden (default ist aus)

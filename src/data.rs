@@ -6,6 +6,35 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{Local, NaiveDate};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use reqwest::blocking::Client;
+
+#[derive(Clone, Debug)]
+pub enum BackendConfig {
+    Local(PathBuf),
+    WebDav {
+        url: String,
+        username: Option<String>,
+        password: Option<String>,
+    },
+}
+
+static BACKEND_CONFIG: Lazy<Mutex<BackendConfig>> = Lazy::new(|| {
+    let configured = env::var("TODOS_DB_PATH").unwrap_or_else(|_| {
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join("TodosDatenbank.md").to_string_lossy().to_string()
+    });
+    Mutex::new(BackendConfig::Local(PathBuf::from(configured)))
+});
+
+pub fn set_backend_config(config: BackendConfig) {
+    if let Ok(mut c) = BACKEND_CONFIG.lock() {
+        *c = config;
+    }
+}
+
+pub fn get_backend_config() -> BackendConfig {
+    BACKEND_CONFIG.lock().unwrap().clone()
+}
 
 static TODO_PATH: Lazy<Mutex<PathBuf>> = Lazy::new(|| {
     let configured = env::var("TODOS_DB_PATH").unwrap_or_else(|_| {
@@ -49,14 +78,58 @@ pub fn todo_path() -> PathBuf {
 
 pub fn set_todo_path(new_path: PathBuf) {
     if let Ok(mut path) = TODO_PATH.lock() {
-        *path = new_path;
+        *path = new_path.clone();
+    }
+    set_backend_config(BackendConfig::Local(new_path));
+}
+
+fn read_content() -> Result<String> {
+    let config = get_backend_config();
+    match config {
+        BackendConfig::Local(path) => {
+             fs::read_to_string(&path)
+                .with_context(|| format!("Konnte {} nicht lesen", path.display()))
+        }
+        BackendConfig::WebDav { url, username, password } => {
+            let client = Client::new();
+            let mut req = client.get(&url);
+            if let (Some(u), Some(p)) = (username, password) {
+                req = req.basic_auth(u, Some(p));
+            }
+            let resp = req.send()?;
+            if !resp.status().is_success() {
+                bail!("WebDAV error: {}", resp.status());
+            }
+            Ok(resp.text()?)
+        }
+    }
+}
+
+fn write_content(content: String) -> Result<()> {
+    let config = get_backend_config();
+    match config {
+        BackendConfig::Local(path) => {
+             fs::write(&path, content)
+                .with_context(|| format!("Konnte {} nicht schreiben", path.display()))
+        }
+        BackendConfig::WebDav { url, username, password } => {
+            let client = Client::new();
+            let mut req = client.put(&url);
+            if let (Some(u), Some(p)) = (username, password) {
+                req = req.basic_auth(u, Some(p));
+            }
+            req = req.body(content);
+            let resp = req.send()?;
+            if !resp.status().is_success() {
+                bail!("WebDAV error: {}", resp.status());
+            }
+            Ok(())
+        }
     }
 }
 
 pub fn load_todos() -> Result<Vec<TodoItem>> {
-    let path = todo_path();
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("Konnte {} nicht lesen", path.display()))?;
+    let content = read_content()?;
 
     let mut items = Vec::new();
     let mut current_section = String::from("Ohne Abschnitt");
@@ -77,9 +150,7 @@ pub fn load_todos() -> Result<Vec<TodoItem>> {
 }
 
 pub fn toggle_todo(key: &TodoKey, done: bool) -> Result<()> {
-    let path = todo_path();
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("Konnte {} nicht lesen", path.display()))?;
+    let content = read_content()?;
     let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
     let had_trailing_newline = content.ends_with('\n');
 
@@ -101,8 +172,7 @@ pub fn toggle_todo(key: &TodoKey, done: bool) -> Result<()> {
         output.push('\n');
     }
 
-    fs::write(&path, output)
-        .with_context(|| format!("Konnte {} nicht schreiben", path.display()))?;
+    write_content(output)?;
 
     Ok(())
 }
@@ -124,9 +194,7 @@ pub fn add_todo(title: &str) -> Result<()> {
         bail!("Titel darf nicht leer sein");
     }
 
-    let path = todo_path();
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("Konnte {} nicht lesen", path.display()))?;
+    let content = read_content()?;
     let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
 
     let insert_index = lines
@@ -144,8 +212,7 @@ pub fn add_todo(title: &str) -> Result<()> {
         output.push('\n');
     }
 
-    fs::write(&path, output)
-        .with_context(|| format!("Konnte {} nicht schreiben", path.display()))?;
+    write_content(output)?;
 
     Ok(())
 }
@@ -222,9 +289,7 @@ fn update_line<F>(key: &TodoKey, rewrite: F) -> Result<()>
 where
     F: FnOnce(&str) -> Result<String>,
 {
-    let path = todo_path();
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("Konnte {} nicht lesen", path.display()))?;
+    let content = read_content()?;
     let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
     let had_trailing_newline = content.ends_with('\n');
 
@@ -246,8 +311,7 @@ where
         output.push('\n');
     }
 
-    fs::write(&path, output)
-        .with_context(|| format!("Konnte {} nicht schreiben", path.display()))?;
+    write_content(output)?;
 
     Ok(())
 }
@@ -327,13 +391,7 @@ fn apply_completion_marker(line: &str, done: bool) -> String {
         if COMPLETION_RE.is_match(line) {
             line.to_string()
         } else {
-            let marker = format!(" ✅ {}", Local::now().format("%Y-%m-%d"));
-            if let Some(idx) = line.rfind(" ^") {
-                let (head, tail) = line.split_at(idx);
-                format!("{head}{marker}{tail}")
-            } else {
-                format!("{line}{marker}")
-            }
+            line.to_string()
         }
     } else {
         COMPLETION_RE.replace(line, "").to_string()

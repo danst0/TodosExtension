@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Todos</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 1rem; background-color: #fafafa; color: #333; }
+        h1 { text-align: center; color: #333; }
+        .todo-list { list-style: none; padding: 0; }
+        .todo-item { background: white; padding: 0.75rem; margin-bottom: 0.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); display: flex; align-items: flex-start; border: 1px solid #eee; }
+        .todo-item.done .title { text-decoration: line-through; color: #999; }
+        .checkbox { margin-right: 1rem; cursor: pointer; text-decoration: none; font-size: 1.4rem; line-height: 1; color: #3584e4; }
+        .checkbox.unchecked { color: #ccc; }
+        .content { flex-grow: 1; }
+        .title { font-size: 1rem; line-height: 1.4; }
+        .meta { font-size: 0.85rem; color: #666; margin-top: 0.3rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+        .tag { background: #f0f0f0; padding: 2px 8px; border-radius: 12px; color: #555; }
+        .tag.project { color: #e66100; background: #fff1e5; }
+        .tag.context { color: #1a5fb4; background: #eef5ff; }
+        .due { color: #c01c28; font-weight: 500; }
+        .add-form { display: flex; margin-bottom: 2rem; box-shadow: 0 2px 6px rgba(0,0,0,0.1); border-radius: 8px; }
+        .add-form input { flex-grow: 1; padding: 0.8rem; border: 1px solid #ddd; border-right: none; border-radius: 8px 0 0 8px; font-size: 1rem; outline: none; }
+        .add-form input:focus { border-color: #3584e4; }
+        .add-form button { padding: 0.8rem 1.5rem; background: #3584e4; color: white; border: none; border-radius: 0 8px 8px 0; cursor: pointer; font-size: 1rem; font-weight: bold; }
+        .add-form button:hover { background: #1c71d8; }
+        .section-header { margin-top: 2rem; margin-bottom: 1rem; font-size: 1.2rem; font-weight: 600; color: #333; padding-bottom: 0.5rem; border-bottom: 2px solid #eee; }
+    </style>
+</head>
+<body>
+    <h1>Todos</h1>
+    
+    <form class="add-form" action="{{ url_for('add') }}" method="post">
+        <input type="text" name="title" placeholder="New task..." required>
+        <button type="submit">Add</button>
+    </form>
+
+    <div class="todo-list">
+        {% set current_section = namespace(value=None) %}
+        {% for todo in todos %}
+            {% if todo.section != current_section.value %}
+                <div class="section-header">{{ todo.section }}</div>
+                {% set current_section.value = todo.section %}
+            {% endif %}
+            
+            <div class="todo-item {% if todo.done %}done{% endif %}">
+                <a href="{{ url_for('toggle', line_index=todo.line_index) }}" class="checkbox {% if not todo.done %}unchecked{% endif %}">
+                    {% if todo.done %}☑{% else %}☐{% endif %}
+                </a>
+                <div class="content">
+                    <div class="title">{{ todo.title }}</div>
+                    <div class="meta">
+                        {% if todo.project %}<span class="tag project">+{{ todo.project }}</span>{% endif %}
+                        {% if todo.context %}<span class="tag context">@{{ todo.context }}</span>{% endif %}
+                        {% if todo.due %}<span class="due">Due: {{ todo.due }}</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+</body>
+</html>

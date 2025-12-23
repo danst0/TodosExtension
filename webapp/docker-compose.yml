@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  webapp:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ../TodosDatenbank.md:/data/TodosDatenbank.md
+    environment:
+      - TODOS_DB_PATH=/data/TodosDatenbank.md
+      - APP_USER=admin
+      - APP_PASSWORD=secret

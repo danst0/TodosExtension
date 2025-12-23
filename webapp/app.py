@@ -1,0 +1,200 @@
+import os
+import re
+from datetime import datetime
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key')
+
+TODO_PATH = os.environ.get('TODOS_DB_PATH', 'TodosDatenbank.md')
+
+LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+PROJECT_RE = re.compile(r"\+([^\s]+)")
+CONTEXT_RE = re.compile(r"@([^\s]+)")
+DUE_RE = re.compile(r"due:(\d{4}-\d{2}-\d{2})")
+ID_RE = re.compile(r"\^([A-Za-z0-9]+)")
+COMPLETION_RE = re.compile(r"\s✅\s\d{4}-\d{2}-\d{2}")
+
+def load_todos():
+    if not os.path.exists(TODO_PATH):
+        return []
+    
+    with open(TODO_PATH, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    items = []
+    current_section = "Ohne Abschnitt"
+    
+    for line_index, line in enumerate(content.splitlines()):
+        trimmed = line.strip()
+        if trimmed.startswith("###"):
+            current_section = trimmed.lstrip('#').strip()
+            continue
+        
+        item = parse_line(line, line_index, current_section)
+        if item:
+            items.append(item)
+    
+    return items
+
+def parse_line(line, line_index, section):
+    trimmed = line.lstrip()
+    done = False
+    rest = ""
+    
+    if trimmed.startswith("- [x]"):
+        done = True
+        rest = trimmed[5:].strip()
+    elif trimmed.startswith("- [X]"):
+        done = True
+        rest = trimmed[5:].strip()
+    elif trimmed.startswith("- [ ]"):
+        done = False
+        rest = trimmed[5:].strip()
+    else:
+        return None
+    
+    title = extract_title(rest)
+    project = capture_token(PROJECT_RE, rest)
+    context = capture_token(CONTEXT_RE, rest)
+    due_str = capture_token(DUE_RE, rest)
+    due = None
+    if due_str:
+        try:
+            due = datetime.strptime(due_str, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    
+    reference = capture_token(LINK_RE, rest)
+    marker = capture_token(ID_RE, rest)
+    
+    return {
+        'line_index': line_index,
+        'marker': marker,
+        'title': title,
+        'section': section,
+        'project': project,
+        'context': context,
+        'due': due,
+        'reference': reference,
+        'done': done,
+        'raw_line': line
+    }
+
+def capture_token(regex, text):
+    match = regex.search(text)
+    if match:
+        return match.group(1).strip()
+    return None
+
+def extract_title(rest):
+    markers = [" +", " @", " due:", " [[", " ✅", " ^", "+", "@", "due:", "[[", "✅", "^"]
+    cut = len(rest)
+    for marker in markers:
+        idx = rest.find(marker)
+        if idx != -1 and idx < cut:
+            cut = idx
+    
+    raw = rest[:cut]
+    cleaned = raw.strip()
+    return cleaned if cleaned else rest.strip()
+
+def toggle_todo(line_index, done):
+    with open(TODO_PATH, 'r', encoding='utf-8') as f:
+        lines = f.read().splitlines()
+    
+    if line_index < len(lines):
+        lines[line_index] = rewrite_line(lines[line_index], done)
+        
+        with open(TODO_PATH, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines) + '\n')
+
+def rewrite_line(line, done):
+    updated = line
+    if done:
+        updated = updated.replace("- [ ]", "- [x]", 1)
+        updated = updated.replace("- [X]", "- [x]", 1)
+    else:
+        updated = updated.replace("- [x]", "- [ ]", 1)
+        updated = updated.replace("- [X]", "- [ ]", 1)
+    
+    # Handle completion marker (remove it as per recent changes)
+    updated = COMPLETION_RE.sub("", updated)
+    
+    return updated
+
+def add_todo(title):
+    with open(TODO_PATH, 'r', encoding='utf-8') as f:
+        lines = f.read().splitlines()
+    
+    insert_index = len(lines)
+    for i, line in enumerate(lines):
+        if line.strip() == "---":
+            insert_index = i
+            break
+    
+    today = datetime.now().strftime("%Y-%m-%d")
+    new_line = f"- [ ] {title} due:{today}"
+    lines.insert(insert_index, new_line)
+    
+    with open(TODO_PATH, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines) + '\n')
+
+@app.route('/')
+def index():
+    if 'logged_in' not in session:
+        return redirect(url_for('login'))
+    
+    todos = load_todos()
+    
+    # Sorting and filtering logic could go here
+    # For now just pass all todos
+    
+    return render_template('index.html', todos=todos)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        if username == os.environ.get('APP_USER') and password == os.environ.get('APP_PASSWORD'):
+            session['logged_in'] = True
+            return redirect(url_for('index'))
+        else:
+            flash('Invalid credentials')
+    return render_template('login.html')
+
+@app.route('/toggle/<int:line_index>')
+def toggle(line_index):
+    if 'logged_in' not in session:
+        return redirect(url_for('login'))
+    
+    # We need to know if it's currently done or not.
+    # Ideally we pass the state, or we read it.
+    # For simplicity, let's read and flip.
+    # But wait, toggle_todo takes 'done' target state.
+    
+    # Let's just read the file again to check current state
+    with open(TODO_PATH, 'r', encoding='utf-8') as f:
+        lines = f.read().splitlines()
+    
+    if line_index < len(lines):
+        line = lines[line_index]
+        is_done = "- [x]" in line or "- [X]" in line
+        toggle_todo(line_index, not is_done)
+    
+    return redirect(url_for('index'))
+
+@app.route('/add', methods=['POST'])
+def add():
+    if 'logged_in' not in session:
+        return redirect(url_for('login'))
+    
+    title = request.form.get('title')
+    if title:
+        add_todo(title)
+    
+    return redirect(url_for('index'))
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
