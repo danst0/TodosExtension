@@ -100,6 +100,9 @@ fn read_content() -> Result<String> {
             }
             let resp = req.send()?;
             if !resp.status().is_success() {
+                if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                    bail!("WebDAV error: 404 Not Found. (Hint: For Nextcloud, ensure URL ends with /remote.php/dav/files/USERNAME)");
+                }
                 bail!("WebDAV error: {}", resp.status());
             }
             Ok(resp.text()?)
@@ -132,6 +135,9 @@ pub fn test_webdav_connection(url: &str, username: Option<&str>, password: Optio
     // Let's just do a GET. If it's a huge file, it might be slow, but for a todo list it's fine.
     let resp_get = req_get.send()?;
     if !resp_get.status().is_success() {
+         if resp_get.status() == reqwest::StatusCode::NOT_FOUND {
+             bail!("Verbindung zu '{}' fehlgeschlagen: 404 Not Found. (Hint: For Nextcloud, ensure URL ends with /remote.php/dav/files/USERNAME)", url);
+         }
          bail!("Verbindung zu '{}' fehlgeschlagen: {}", url, resp_get.status());
     }
     Ok(())
@@ -155,6 +161,9 @@ fn write_content(content: String) -> Result<()> {
             req = req.body(content);
             let resp = req.send()?;
             if !resp.status().is_success() {
+                if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                    bail!("WebDAV error: 404 Not Found. (Hint: For Nextcloud, ensure URL ends with /remote.php/dav/files/USERNAME)");
+                }
                 bail!("WebDAV error: {}", resp.status());
             }
             Ok(())
