@@ -24,12 +24,45 @@
         .add-form button { padding: 0.8rem 1.5rem; background: #3584e4; color: white; border: none; border-radius: 0 8px 8px 0; cursor: pointer; font-size: 1rem; font-weight: bold; }
         .add-form button:hover { background: #1c71d8; }
         .section-header { margin-top: 2rem; margin-bottom: 1rem; font-size: 1.2rem; font-weight: 600; color: #333; padding-bottom: 0.5rem; border-bottom: 2px solid #eee; }
+        
+        .filter-link { text-decoration: none; color: #999; font-weight: normal; }
+        .filter-link.active { color: #3584e4; font-weight: bold; }
+
+        @media (prefers-color-scheme: dark) {
+            body { background-color: #1e1e1e; color: #e0e0e0; }
+            h1 { color: #e0e0e0; }
+            .todo-item { background: #2d2d2d; border-color: #444; }
+            .todo-item.done .title { color: #666; }
+            .checkbox.unchecked { color: #555; }
+            .meta { color: #aaa; }
+            .tag { background: #3d3d3d; color: #ccc; }
+            .tag.project { background: #4a2c1a; color: #ffb380; }
+            .tag.context { background: #1a3b5c; color: #8cb4ff; }
+            .due { color: #ff7b72; }
+            .add-form input { background: #2d2d2d; border-color: #444; color: #e0e0e0; }
+            .add-form button { background: #3584e4; }
+            .section-header { color: #e0e0e0; border-bottom-color: #444; }
+            .filter-link { color: #888; }
+            .filter-link.active { color: #78aeed; }
+        }
     </style>
 </head>
 <body>
     <h1>Todos</h1>
     
-    <form class="add-form" action="{{ url_for('add') }}" method="post">
+    <div class="filters" style="margin-bottom: 1rem; display: flex; gap: 1rem; justify-content: center;">
+        <a href="{{ url_for('index', show_done=0 if show_done else 1, show_due_only=1 if show_due_only else 0) }}" 
+           class="filter-link {% if show_done %}active{% endif %}">
+           {% if show_done %}☑ Show Done{% else %}☐ Show Done{% endif %}
+        </a>
+        
+        <a href="{{ url_for('index', show_done=1 if show_done else 0, show_due_only=0 if show_due_only else 1) }}"
+           class="filter-link {% if show_due_only %}active{% endif %}">
+           {% if show_due_only %}☑ Hide Future{% else %}☐ Hide Future{% endif %}
+        </a>
+    </div>
+    
+    <form class="add-form" action="{{ url_for('add', show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0) }}" method="post">
         <input type="text" name="title" placeholder="New task..." required>
         <button type="submit">Add</button>
     </form>
@@ -43,7 +76,7 @@
             {% endif %}
             
             <div class="todo-item {% if todo.done %}done{% endif %}">
-                <a href="{{ url_for('toggle', line_index=todo.line_index) }}" class="checkbox {% if not todo.done %}unchecked{% endif %}">
+                <a href="{{ url_for('toggle', line_index=todo.line_index, show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0) }}" class="checkbox {% if not todo.done %}unchecked{% endif %}">
                     {% if todo.done %}☑{% else %}☐{% endif %}
                 </a>
                 <div class="content">

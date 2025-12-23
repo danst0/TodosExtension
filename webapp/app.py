@@ -188,10 +188,24 @@ def index():
     
     todos = load_todos()
     
-    # Sorting and filtering logic could go here
-    # For now just pass all todos
+    # Filter logic
+    show_done = request.args.get('show_done') == '1'
+    show_due_only = request.args.get('show_due_only') == '1'
     
-    return render_template('index.html', todos=todos)
+    today = datetime.now().date()
+    filtered_todos = []
+    
+    for todo in todos:
+        if not show_done and todo['done']:
+            continue
+        
+        if show_due_only:
+            if todo['due'] and todo['due'] > today:
+                continue
+        
+        filtered_todos.append(todo)
+    
+    return render_template('index.html', todos=filtered_todos, show_done=show_done, show_due_only=show_due_only)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -224,7 +238,10 @@ def toggle(line_index):
         is_done = "- [x]" in line or "- [X]" in line
         toggle_todo(line_index, not is_done)
     
-    return redirect(url_for('index'))
+    show_done = request.args.get('show_done', '0')
+    show_due_only = request.args.get('show_due_only', '0')
+    
+    return redirect(url_for('index', show_done=show_done, show_due_only=show_due_only))
 
 @app.route('/add', methods=['POST'])
 def add():
@@ -235,7 +252,10 @@ def add():
     if title:
         add_todo(title)
     
-    return redirect(url_for('index'))
+    show_done = request.args.get('show_done', '0')
+    show_due_only = request.args.get('show_due_only', '0')
+    
+    return redirect(url_for('index', show_done=show_done, show_due_only=show_due_only))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

@@ -41,6 +41,7 @@ Login-Daten (konfigurierbar in `docker-compose.yml`):
 
 ## Offene Todos
 - [ ] Esc closes the Preferences Window
+- [ ] for the webapp please use long lifed cookies to prevent further needs for login
 
 ## Erledigte Todos
 - [x] Add a license CC BY NC SA
