@@ -110,37 +110,64 @@ fn read_content() -> Result<String> {
     }
 }
 
-pub fn test_webdav_connection(url: &str, username: Option<&str>, password: Option<&str>) -> Result<()> {
+pub fn test_webdav_connection(base_url: &str, path: Option<&str>, username: Option<&str>, password: Option<&str>) -> Result<Option<String>> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    // Try HEAD first
-    let mut req = client.head(url);
-    if let (Some(u), Some(p)) = (username, password) {
-        req = req.basic_auth(u, Some(p));
-    }
-    
-    let resp = req.send()?;
-    if resp.status().is_success() {
-        return Ok(());
-    }
 
-    // Fallback to GET if HEAD fails (e.g. 405 Method Not Allowed)
-    let mut req_get = client.get(url);
-    if let (Some(u), Some(p)) = (username, password) {
-        req_get = req_get.basic_auth(u, Some(p));
+    let construct_url = |base: &str| -> String {
+        if let Some(p) = path {
+            format!("{}/{}", base.trim_end_matches('/'), p.trim_start_matches('/'))
+        } else {
+            base.to_string()
+        }
+    };
+
+    let try_connect = |target_url: &str| -> Result<()> {
+        // Try HEAD first
+        let mut req = client.head(target_url);
+        if let (Some(u), Some(p)) = (username, password) {
+            req = req.basic_auth(u, Some(p));
+        }
+        
+        let resp = req.send()?;
+        if resp.status().is_success() {
+            return Ok(());
+        }
+
+        // Fallback to GET
+        let mut req_get = client.get(target_url);
+        if let (Some(u), Some(p)) = (username, password) {
+            req_get = req_get.basic_auth(u, Some(p));
+        }
+        let resp_get = req_get.send()?;
+        if !resp_get.status().is_success() {
+             if resp_get.status() == reqwest::StatusCode::NOT_FOUND {
+                 bail!("404 Not Found");
+             }
+             bail!("HTTP {}", resp_get.status());
+        }
+        Ok(())
+    };
+
+    let full_url = construct_url(base_url);
+    match try_connect(&full_url) {
+        Ok(_) => return Ok(None),
+        Err(e) => {
+            // If it failed, and we have a username, try to guess Nextcloud path
+            if let Some(user) = username {
+                if !base_url.contains("remote.php/dav/files") {
+                    let candidate_base = format!("{}/remote.php/dav/files/{}", base_url.trim_end_matches('/'), user);
+                    let candidate_full = construct_url(&candidate_base);
+                    if try_connect(&candidate_full).is_ok() {
+                        return Ok(Some(candidate_base));
+                    }
+                }
+            }
+            // Return original error with context
+            bail!("Verbindung zu '{}' fehlgeschlagen: {}", full_url, e);
+        }
     }
-    // Use a range header to avoid downloading the whole file if possible? 
-    // But standard WebDAV might not support it or it might be complicated.
-    // Let's just do a GET. If it's a huge file, it might be slow, but for a todo list it's fine.
-    let resp_get = req_get.send()?;
-    if !resp_get.status().is_success() {
-         if resp_get.status() == reqwest::StatusCode::NOT_FOUND {
-             bail!("Verbindung zu '{}' fehlgeschlagen: 404 Not Found. (Hint: For Nextcloud, ensure URL ends with /remote.php/dav/files/USERNAME)", url);
-         }
-         bail!("Verbindung zu '{}' fehlgeschlagen: {}", url, resp_get.status());
-    }
-    Ok(())
 }
 
 fn write_content(content: String) -> Result<()> {

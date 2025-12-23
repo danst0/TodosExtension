@@ -890,6 +890,7 @@ impl AppState {
         let check_btn = gtk::Button::with_label("Verbindung prüfen");
         check_btn.set_margin_top(8);
         let state_for_check = Rc::clone(self);
+        let url_entry_for_update = url_entry.clone();
         check_btn.connect_clicked(move |_| {
             let (_, url, path, user, pass) = state_for_check.get_webdav_prefs();
             
@@ -902,25 +903,29 @@ impl AppState {
                 return;
             }
 
-            let full_url = if let Some(p) = path {
-                format!("{}/{}", u.trim_end_matches('/'), p.trim_start_matches('/'))
-            } else {
-                u
-            };
-
             let state_bg = state_for_check.clone();
             let (sender, receiver) = std::sync::mpsc::channel();
             
+            let u_clone = u.clone();
+            let path_clone = path.clone();
+            let user_clone = user.clone();
+            let pass_clone = pass.clone();
+
             std::thread::spawn(move || {
-                let result = data::test_webdav_connection(&full_url, user.as_deref(), pass.as_deref());
+                let result = data::test_webdav_connection(&u_clone, path_clone.as_deref(), user_clone.as_deref(), pass_clone.as_deref());
                 let _ = sender.send(result);
             });
 
+            let url_entry_update = url_entry_for_update.clone();
             glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
                 match receiver.try_recv() {
                     Ok(result) => {
                         match result {
-                            Ok(_) => state_bg.show_info("Verbindung erfolgreich!"),
+                            Ok(None) => state_bg.show_info("Verbindung erfolgreich!"),
+                            Ok(Some(new_url)) => {
+                                url_entry_update.set_text(&new_url);
+                                state_bg.show_info("Verbindung erfolgreich! URL wurde automatisch korrigiert.");
+                            }
                             Err(e) => {
                                 eprintln!("WebDAV Connection Error: {}", e);
                                 state_bg.show_error(&format!("Verbindung fehlgeschlagen: {}", e));
