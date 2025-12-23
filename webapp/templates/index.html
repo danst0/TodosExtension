@@ -50,19 +50,34 @@
 <body>
     <h1>Todos</h1>
     
-    <div class="filters" style="margin-bottom: 1rem; display: flex; gap: 1rem; justify-content: center;">
-        <a href="{{ url_for('index', show_done=0 if show_done else 1, show_due_only=1 if show_due_only else 0) }}" 
+    <div class="filters" style="margin-bottom: 1rem; display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+        <a href="{{ url_for('index', show_done=0 if show_done else 1, show_due_only=1 if show_due_only else 0, sort_mode=sort_mode) }}" 
            class="filter-link {% if show_done %}active{% endif %}">
            {% if show_done %}☑ Show Done{% else %}☐ Show Done{% endif %}
         </a>
         
-        <a href="{{ url_for('index', show_done=1 if show_done else 0, show_due_only=0 if show_due_only else 1) }}"
+        <a href="{{ url_for('index', show_done=1 if show_done else 0, show_due_only=0 if show_due_only else 1, sort_mode=sort_mode) }}"
            class="filter-link {% if show_due_only %}active{% endif %}">
            {% if show_due_only %}☑ Hide Future{% else %}☐ Hide Future{% endif %}
         </a>
+
+        <span style="color: #ccc;">|</span>
+
+        <a href="{{ url_for('index', show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0, sort_mode='topic') }}"
+           class="filter-link {% if sort_mode == 'topic' %}active{% endif %}">
+           Topic
+        </a>
+        <a href="{{ url_for('index', show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0, sort_mode='location') }}"
+           class="filter-link {% if sort_mode == 'location' %}active{% endif %}">
+           Location
+        </a>
+        <a href="{{ url_for('index', show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0, sort_mode='date') }}"
+           class="filter-link {% if sort_mode == 'date' %}active{% endif %}">
+           Date
+        </a>
     </div>
     
-    <form class="add-form" action="{{ url_for('add', show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0) }}" method="post">
+    <form class="add-form" action="{{ url_for('add', show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0, sort_mode=sort_mode) }}" method="post">
         <input type="text" name="title" placeholder="New task..." required>
         <button type="submit">Add</button>
     </form>
@@ -76,7 +91,7 @@
             {% endif %}
             
             <div class="todo-item {% if todo.done %}done{% endif %}">
-                <a href="{{ url_for('toggle', line_index=todo.line_index, show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0) }}" class="checkbox {% if not todo.done %}unchecked{% endif %}">
+                <a href="{{ url_for('toggle', line_index=todo.line_index, show_done=1 if show_done else 0, show_due_only=1 if show_due_only else 0, sort_mode=sort_mode) }}" class="checkbox {% if not todo.done %}unchecked{% endif %}">
                     {% if todo.done %}☑{% else %}☐{% endif %}
                 </a>
                 <div class="content">

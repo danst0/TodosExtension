@@ -181,6 +181,41 @@ def add_todo(title):
     
     write_content('\n'.join(lines) + '\n')
 
+def sort_key_topic(todo):
+    # Project (asc), Section (asc), Title (asc), Context (asc)
+    # Rust: Some < None (With Project comes before Without Project)
+    p = todo['project']
+    c = todo['context']
+    return (
+        0 if p else 1, p.lower() if p else "",
+        todo['section'].lower(),
+        todo['title'].lower(),
+        0 if c else 1, c.lower() if c else ""
+    )
+
+def sort_key_location(todo):
+    # Context (asc), Section (asc), Title (asc), Project (asc)
+    # Rust: Some < None (With Context comes before Without Context)
+    p = todo['project']
+    c = todo['context']
+    return (
+        0 if c else 1, c.lower() if c else "",
+        todo['section'].lower(),
+        todo['title'].lower(),
+        0 if p else 1, p.lower() if p else ""
+    )
+
+def sort_key_date(todo):
+    # Due (asc), then Project sort
+    # Rust: None < Some (No Date comes before With Date)
+    d = todo['due']
+    key_project = sort_key_topic(todo)
+    
+    if d is None:
+        return (0, datetime.min.date(), key_project)
+    else:
+        return (1, d, key_project)
+
 @app.route('/')
 def index():
     if 'logged_in' not in session:
@@ -191,6 +226,7 @@ def index():
     # Filter logic
     show_done = request.args.get('show_done') == '1'
     show_due_only = request.args.get('show_due_only') == '1'
+    sort_mode = request.args.get('sort_mode', 'topic')
     
     today = datetime.now().date()
     filtered_todos = []
@@ -205,7 +241,37 @@ def index():
         
         filtered_todos.append(todo)
     
-    return render_template('index.html', todos=filtered_todos, show_done=show_done, show_due_only=show_due_only)
+    # Sorting logic
+    if sort_mode == 'location':
+        filtered_todos.sort(key=sort_key_location)
+    elif sort_mode == 'date':
+        filtered_todos.sort(key=sort_key_date)
+    else: # topic
+        filtered_todos.sort(key=sort_key_topic)
+    
+    # Grouping logic for display
+    # We need to adjust the 'section' field of the todo items for display purposes
+    # based on the sort mode, similar to Rust's group_label
+    
+    display_todos = []
+    for todo in filtered_todos:
+        display_item = todo.copy()
+        if sort_mode == 'topic':
+            display_item['section'] = f"Thema: {todo['project'] if todo['project'] else 'Ohne Projekt'}"
+        elif sort_mode == 'location':
+            display_item['section'] = f"Ort: {todo['context'] if todo['context'] else 'Ohne Ort'}"
+        elif sort_mode == 'date':
+            # No grouping for date sort in Rust implementation (returns None)
+            # But the template expects a section. Let's use a dummy or empty section?
+            # Or maybe we should group by date?
+            # Rust implementation returns None for group_label in Date mode.
+            # In the template, if section changes, it prints a header.
+            # If we set all sections to the same value, no headers will be printed (except the first one).
+            display_item['section'] = "" 
+        
+        display_todos.append(display_item)
+
+    return render_template('index.html', todos=display_todos, show_done=show_done, show_due_only=show_due_only, sort_mode=sort_mode)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -240,8 +306,9 @@ def toggle(line_index):
     
     show_done = request.args.get('show_done', '0')
     show_due_only = request.args.get('show_due_only', '0')
+    sort_mode = request.args.get('sort_mode', 'topic')
     
-    return redirect(url_for('index', show_done=show_done, show_due_only=show_due_only))
+    return redirect(url_for('index', show_done=show_done, show_due_only=show_due_only, sort_mode=sort_mode))
 
 @app.route('/add', methods=['POST'])
 def add():
@@ -254,8 +321,9 @@ def add():
     
     show_done = request.args.get('show_done', '0')
     show_due_only = request.args.get('show_due_only', '0')
+    sort_mode = request.args.get('sort_mode', 'topic')
     
-    return redirect(url_for('index', show_done=show_done, show_due_only=show_due_only))
+    return redirect(url_for('index', show_done=show_done, show_due_only=show_due_only, sort_mode=sort_mode))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
