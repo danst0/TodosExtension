@@ -9,8 +9,15 @@ flatpak install --user --noninteractive --or-update org.gnome.Platform//49 org.g
 # Build the Flatpak
 echo "Building Flatpak..."
 # --force-clean ensures a fresh build
-# --install installs it to the user's flatpak installation
-flatpak-builder --user --install --force-clean build-dir org.example.TodosExtension.yml
+flatpak-builder --force-clean --repo=repo build-dir me.dumke.TodosExtension.yml
 
-echo "Build complete! You can run the app with:"
-echo "flatpak run org.example.TodosExtension"
+# Create a bundle
+echo "Creating Bundle..."
+flatpak build-bundle repo todos_extension.flatpak me.dumke.TodosExtension
+
+# Install the Flatpak
+echo "Installing Flatpak..."
+flatpak install --user --noninteractive --or-update todos_extension.flatpak
+
+echo "Build and install complete! You can run the app with:"
+echo "flatpak run me.dumke.TodosExtension"

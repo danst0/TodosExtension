@@ -5,5 +5,8 @@ TodosDatenbank.md
 build-dir/
 .cargo/
 vendor/
+repo/
+*.flatpak
+
 
 .local

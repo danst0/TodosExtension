@@ -7,10 +7,11 @@ use chrono::{Local, NaiveDate};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-const DEFAULT_DB_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/TodosDatenbank.md");
-
 static TODO_PATH: Lazy<Mutex<PathBuf>> = Lazy::new(|| {
-    let configured = env::var("TODOS_DB_PATH").unwrap_or_else(|_| DEFAULT_DB_PATH.to_string());
+    let configured = env::var("TODOS_DB_PATH").unwrap_or_else(|_| {
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join("TodosDatenbank.md").to_string_lossy().to_string()
+    });
     Mutex::new(PathBuf::from(configured))
 });
 

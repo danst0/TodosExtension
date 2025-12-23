@@ -225,6 +225,14 @@ pub fn build_ui(app: &Application) -> Result<()> {
     // Setze Fokus direkt ins neue Eingabefeld beim Start
     new_entry.grab_focus();
 
+    // Wenn das Fenster den Fokus erhält, setze den Cursor in das Eingabefeld
+    let new_entry_for_focus = new_entry.clone();
+    window.connect_notify_local(Some("is-active"), move |window, _| {
+        if window.is_active() {
+            new_entry_for_focus.grab_focus();
+        }
+    });
+
     let refresh_action = gio::SimpleAction::new("reload", None);
     refresh_action.connect_activate(clone!(@weak state => move |_, _| {
         if let Err(err) = state.reload() {
@@ -253,7 +261,11 @@ pub fn build_ui(app: &Application) -> Result<()> {
         let _ = app.activate_action("app.reload", None);
     }));
 
-    state.reload()?;
+    if let Err(err) = state.reload() {
+        state.show_error(&format!("Konnte To-dos nicht laden: {err}\nBitte wählen Sie eine gültige Datei in den Einstellungen."));
+        state.show_settings_dialog();
+    }
+
     sort_selector.connect_selected_notify(clone!(@weak state => move |dropdown| {
         let mode = SortMode::from_index(dropdown.selected());
         state.set_sort_mode(mode);

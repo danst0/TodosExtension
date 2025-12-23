@@ -27,7 +27,9 @@ Standardmäßig greift die App auf die Datei `TodosDatenbank.md` im Projektverze
 - Über die Tastaturkürzel `Ctrl+W`, `Ctrl+Q` und `Alt+F4` kannst du das Fenster jederzeit schließen.
 
 ## Offene Todos
-- *(keine)*
+- [ ] Add a license CC BY NC SA
+- [ ] remove the checkmark from the TodosDatenbank file
+- [ ] add a simple Webapp with the same layout and functionality. Web App based on docker compose, python, flask, login based on user and password in docker compose env 
 
 ## Erledigte Todos
 - [x] Auf Strg-W und Strg-Q und Alt-F4 reagieren

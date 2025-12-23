@@ -2,7 +2,7 @@
 Name=Todos Extension
 Comment=Manage your todos
 Exec=todos_extension
-Icon=org.example.TodosExtension
+Icon=me.dumke.TodosExtension
 Terminal=false
 Type=Application
 Categories=Utility;GTK;
