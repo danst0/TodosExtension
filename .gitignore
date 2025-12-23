@@ -11,3 +11,6 @@ repo/
 
 .local
 *.pyc
+__pycache__/
+.ipynb_checkpoints
+docker-compose.yml

@@ -2,11 +2,19 @@ import os
 import re
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, session, flash
+import requests
+from requests.auth import HTTPBasicAuth
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key')
 
 TODO_PATH = os.environ.get('TODOS_DB_PATH', 'TodosDatenbank.md')
+
+# WebDAV Configuration
+USE_WEBDAV = os.environ.get('USE_WEBDAV', 'false').lower() == 'true'
+WEBDAV_URL = os.environ.get('WEBDAV_URL')
+WEBDAV_USERNAME = os.environ.get('WEBDAV_USERNAME')
+WEBDAV_PASSWORD = os.environ.get('WEBDAV_PASSWORD')
 
 LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 PROJECT_RE = re.compile(r"\+([^\s]+)")
@@ -15,12 +23,48 @@ DUE_RE = re.compile(r"due:(\d{4}-\d{2}-\d{2})")
 ID_RE = re.compile(r"\^([A-Za-z0-9]+)")
 COMPLETION_RE = re.compile(r"\s✅\s\d{4}-\d{2}-\d{2}")
 
+def read_content():
+    if USE_WEBDAV:
+        if not WEBDAV_URL:
+            return ""
+        try:
+            auth = None
+            if WEBDAV_USERNAME and WEBDAV_PASSWORD:
+                auth = HTTPBasicAuth(WEBDAV_USERNAME, WEBDAV_PASSWORD)
+            
+            response = requests.get(WEBDAV_URL, auth=auth, timeout=10)
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            print(f"WebDAV read error: {e}")
+            return ""
+    else:
+        if not os.path.exists(TODO_PATH):
+            return ""
+        with open(TODO_PATH, 'r', encoding='utf-8') as f:
+            return f.read()
+
+def write_content(content):
+    if USE_WEBDAV:
+        if not WEBDAV_URL:
+            return
+        try:
+            auth = None
+            if WEBDAV_USERNAME and WEBDAV_PASSWORD:
+                auth = HTTPBasicAuth(WEBDAV_USERNAME, WEBDAV_PASSWORD)
+            
+            response = requests.put(WEBDAV_URL, data=content.encode('utf-8'), auth=auth, timeout=10)
+            response.raise_for_status()
+        except Exception as e:
+            print(f"WebDAV write error: {e}")
+    else:
+        with open(TODO_PATH, 'w', encoding='utf-8') as f:
+            f.write(content)
+
 def load_todos():
-    if not os.path.exists(TODO_PATH):
+    content = read_content()
+    if not content:
         return []
-    
-    with open(TODO_PATH, 'r', encoding='utf-8') as f:
-        content = f.read()
     
     items = []
     current_section = "Ohne Abschnitt"
@@ -100,14 +144,12 @@ def extract_title(rest):
     return cleaned if cleaned else rest.strip()
 
 def toggle_todo(line_index, done):
-    with open(TODO_PATH, 'r', encoding='utf-8') as f:
-        lines = f.read().splitlines()
+    content = read_content()
+    lines = content.splitlines()
     
     if line_index < len(lines):
         lines[line_index] = rewrite_line(lines[line_index], done)
-        
-        with open(TODO_PATH, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines) + '\n')
+        write_content('\n'.join(lines) + '\n')
 
 def rewrite_line(line, done):
     updated = line
@@ -124,8 +166,8 @@ def rewrite_line(line, done):
     return updated
 
 def add_todo(title):
-    with open(TODO_PATH, 'r', encoding='utf-8') as f:
-        lines = f.read().splitlines()
+    content = read_content()
+    lines = content.splitlines()
     
     insert_index = len(lines)
     for i, line in enumerate(lines):
@@ -137,8 +179,7 @@ def add_todo(title):
     new_line = f"- [ ] {title} due:{today}"
     lines.insert(insert_index, new_line)
     
-    with open(TODO_PATH, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines) + '\n')
+    write_content('\n'.join(lines) + '\n')
 
 @app.route('/')
 def index():
@@ -175,8 +216,8 @@ def toggle(line_index):
     # But wait, toggle_todo takes 'done' target state.
     
     # Let's just read the file again to check current state
-    with open(TODO_PATH, 'r', encoding='utf-8') as f:
-        lines = f.read().splitlines()
+    content = read_content()
+    lines = content.splitlines()
     
     if line_index < len(lines):
         line = lines[line_index]
