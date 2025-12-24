@@ -362,6 +362,59 @@ def toggle(line_index):
     
     return redirect(url_for('index'))
 
+@app.route('/postpone/<int:line_index>/<string:target>')
+def postpone(line_index, target):
+    if 'logged_in' not in session:
+        return redirect(url_for('login'))
+    
+    content = read_content()
+    lines = content.splitlines()
+    
+    if line_index >= len(lines):
+        return redirect(url_for('index'))
+        
+    line = lines[line_index]
+    item = parse_line(line, line_index, "")
+    if not item:
+        return redirect(url_for('index'))
+        
+    # Calculate new date
+    today = datetime.now().date()
+    new_date = today
+    if target == 'tomorrow':
+        new_date = today + timedelta(days=1)
+    
+    # Update line
+    # We need to replace or add due:YYYY-MM-DD
+    # Let's reuse the logic from edit but simpler
+    
+    # Reconstruct line
+    original_line = lines[line_index]
+    marker = capture_token(ID_RE, original_line)
+    
+    new_line = "- [x] " if item['done'] else "- [ ] "
+    new_line += item['title'].strip()
+    
+    if item['project'] and item['project'].strip():
+        new_line += f" +{item['project'].strip()}"
+        
+    if item['context'] and item['context'].strip():
+        new_line += f" @{item['context'].strip()}"
+        
+    # Always set the new due date
+    new_line += f" due:{new_date.strftime('%Y-%m-%d')}"
+        
+    if item['reference'] and item['reference'].strip():
+        new_line += f" [[{item['reference'].strip()}]]"
+        
+    if marker:
+        new_line += f" ^{marker}"
+        
+    lines[line_index] = new_line
+    write_content('\n'.join(lines) + '\n')
+    
+    return redirect(url_for('index'))
+
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
@@ -422,6 +475,28 @@ def edit(line_index):
         return redirect(url_for('index'))
         
     return render_template('edit.html', todo=item)
+
+@app.route('/api/todo/<int:line_index>')
+def get_todo_json(line_index):
+    if 'logged_in' not in session:
+        return {'error': 'Unauthorized'}, 401
+    
+    content = read_content()
+    lines = content.splitlines()
+    
+    if line_index >= len(lines):
+        return {'error': 'Not found'}, 404
+        
+    line = lines[line_index]
+    item = parse_line(line, line_index, "")
+    if not item:
+        return {'error': 'Invalid item'}, 400
+        
+    # Convert date to string for JSON
+    if item['due']:
+        item['due'] = item['due'].strftime("%Y-%m-%d")
+        
+    return item
 
 @app.route('/add', methods=['POST'])
 def add():
