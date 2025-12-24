@@ -7,10 +7,15 @@ services:
       - "5000:5000"
     volumes:
       - ../TodosDatenbank.md:/data/TodosDatenbank.md
+      - todo_config:/config
     environment:
       - TODOS_DB_PATH=/data/TodosDatenbank.md
+      - CONFIG_PATH=/config/settings.json
       - APP_USER=admin
       - APP_PASSWORD=secret
+
+volumes:
+  todo_config:
       # WebDAV Configuration (Optional)
       - USE_WEBDAV=false
       - WEBDAV_URL=https://your-nextcloud-instance.com/remote.php/dav/files/username/path/to/TodosDatenbank.md

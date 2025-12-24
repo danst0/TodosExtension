@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 import requests
@@ -10,6 +11,7 @@ app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key')
 app.permanent_session_lifetime = timedelta(days=30)
 
 TODO_PATH = os.environ.get('TODOS_DB_PATH', 'TodosDatenbank.md')
+CONFIG_PATH = os.environ.get('CONFIG_PATH', '/config/settings.json')
 
 # WebDAV Configuration
 USE_WEBDAV = os.environ.get('USE_WEBDAV', 'false').lower() == 'true'
@@ -61,6 +63,23 @@ def write_content(content):
     else:
         with open(TODO_PATH, 'w', encoding='utf-8') as f:
             f.write(content)
+
+def load_settings():
+    if not os.path.exists(CONFIG_PATH):
+        return {}
+    try:
+        with open(CONFIG_PATH, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_settings(settings):
+    try:
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(settings, f)
+    except Exception as e:
+        print(f"Error saving settings: {e}")
 
 def load_todos():
     content = read_content()
@@ -224,10 +243,45 @@ def index():
     
     todos = load_todos()
     
+    # Load saved settings
+    settings = load_settings()
+    
+    # Determine effective values
+    # If query params are present, they override settings and update them.
+    # If not, we use settings (or defaults).
+    
+    show_done_val = request.args.get('show_done')
+    show_due_only_val = request.args.get('show_due_only')
+    sort_mode_val = request.args.get('sort_mode')
+    
+    new_settings = settings.copy()
+    changed = False
+    
+    if show_done_val is not None:
+        new_settings['show_done'] = show_done_val
+        changed = True
+    else:
+        show_done_val = settings.get('show_done', '0')
+        
+    if show_due_only_val is not None:
+        new_settings['show_due_only'] = show_due_only_val
+        changed = True
+    else:
+        show_due_only_val = settings.get('show_due_only', '0')
+        
+    if sort_mode_val is not None:
+        new_settings['sort_mode'] = sort_mode_val
+        changed = True
+    else:
+        sort_mode_val = settings.get('sort_mode', 'topic')
+        
+    if changed:
+        save_settings(new_settings)
+    
     # Filter logic
-    show_done = request.args.get('show_done') == '1'
-    show_due_only = request.args.get('show_due_only') == '1'
-    sort_mode = request.args.get('sort_mode', 'topic')
+    show_done = show_done_val == '1'
+    show_due_only = show_due_only_val == '1'
+    sort_mode = sort_mode_val
     
     today = datetime.now().date()
     filtered_todos = []
@@ -306,11 +360,7 @@ def toggle(line_index):
         is_done = "- [x]" in line or "- [X]" in line
         toggle_todo(line_index, not is_done)
     
-    show_done = request.args.get('show_done', '0')
-    show_due_only = request.args.get('show_due_only', '0')
-    sort_mode = request.args.get('sort_mode', 'topic')
-    
-    return redirect(url_for('index', show_done=show_done, show_due_only=show_due_only, sort_mode=sort_mode))
+    return redirect(url_for('index'))
 
 @app.route('/logout')
 def logout():
@@ -382,11 +432,7 @@ def add():
     if title:
         add_todo(title)
     
-    show_done = request.args.get('show_done', '0')
-    show_due_only = request.args.get('show_due_only', '0')
-    sort_mode = request.args.get('sort_mode', 'topic')
-    
-    return redirect(url_for('index', show_done=show_done, show_due_only=show_due_only, sort_mode=sort_mode))
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
